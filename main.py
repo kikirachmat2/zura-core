@@ -25,7 +25,7 @@ from core.config import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TEMP_VOICE_DIR, LOGS_DIR
 )
 from core.brain import brain
-from core.memory import save_message, get_state
+from core.memory import save_message, get_state, set_state
 from voice.tts import synthesize_voice_async, cleanup_temp_voice
 from voice.stt import stt
 from ans.mac_sentinel import mac_sentinel
@@ -229,6 +229,29 @@ class ZuraOrchestrator:
         elif data == "cb_clean":
             freed = mac_sentinel.silent_cache_vacuum(force=True)
             await self.send_text(session, chat_id, f"🧹 Kuras Cache Berhasil! {freed} MB dibebaskan dari Mac lu.", reply_markup=get_executive_menu_markup())
+        elif data.startswith("gitops_apply:"):
+            target_sha = data.split(":", 1)[1]
+            await self.send_text(session, chat_id, f"⏳ <i>Memulai verifikasi sintaks & penerapan commit <code>{target_sha[:7]}</code>...</i>")
+            res = await asyncio.to_thread(gitops_watcher.apply_update, target_sha)
+            if res.get("success"):
+                success_msg = (
+                    f"✅ <b>UPDATE BERHASIL DITERAPKAN!</b>\n\n"
+                    f"• <b>Dari:</b> <code>{res['old_sha']}</code> ➔ <b>Ke:</b> <code>{res['new_sha']}</code>\n"
+                    f"• <b>Verifikasi:</b> Sintaks Python & import test lulus.\n\n"
+                    f"<i>Catatan: Restart service jika perubahan menyentuh memori daemon.</i>"
+                )
+                await self.send_text(session, chat_id, success_msg, reply_markup=get_executive_menu_markup())
+            else:
+                fail_msg = (
+                    f"❌ <b>UPDATE GAGAL (AUTO-ROLLBACK DIEKSEKUSI):</b>\n\n"
+                    f"• <b>Tahap Gagal:</b> <code>{res.get('stage')}</code>\n"
+                    f"• <b>Penyebab:</b> <code>{res.get('error')}</code>\n"
+                    f"• <b>Status:</b> Kode aman dikembalikan ke commit awal (<code>{res.get('rolled_back_to', 'N/A')}</code>)."
+                )
+                await self.send_text(session, chat_id, fail_msg, reply_markup=get_executive_menu_markup())
+        elif data.startswith("gitops_ignore:"):
+            ignored_sha = data.split(":", 1)[1]
+            await self.send_text(session, chat_id, f"ℹ️ Pembaruan commit <code>{ignored_sha}</code> diabaikan.")
 
     async def handle_user_message(self, session: aiohttp.ClientSession, message: dict):
         """Dispatches incoming text or voice message."""
@@ -446,12 +469,28 @@ class ZuraOrchestrator:
                     if cycle_count % 3 == 0:
                         server_watchdog.probe_all_servers()
 
-                    # 4. Ultra-Low-Bandwidth GitOps Auto-Update Check (Every 10 mins / 600s)
+                    # 4. GitOps Update Check (L3 Guardrail: Notification with inline approval button only)
                     if cycle_count % 10 == 0:
-                        update_res = gitops_watcher.check_and_apply_update()
-                        if update_res.get("updated"):
-                            up_msg = f"⚡ <b>GITOPS AUTO-UPDATE:</b> Zura berhasil sinkron ke commit <code>{update_res['new_sha']}</code> dari GitHub! Kodingan terbaru aktif."
-                            await self.send_text(session, self.authorized_chat_id, up_msg)
+                        check = gitops_watcher.check_for_updates()
+                        if check.get("update_available"):
+                            full_sha = check["full_remote_sha"]
+                            last_notified = get_state("last_notified_gitops_sha", "")
+                            if last_notified != full_sha:
+                                set_state("last_notified_gitops_sha", full_sha)
+                                up_msg = (
+                                    f"🚨 <b>PEMBARUAN KODE TERSEDIA DI GITHUB:</b>\n\n"
+                                    f"• <b>Branch:</b> <code>{check['branch']}</code>\n"
+                                    f"• <b>Commit Remote:</b> <code>{check['remote_sha']}</code>\n"
+                                    f"• <b>Commit Lokal:</b> <code>{check['local_sha']}</code>\n\n"
+                                    f"<i>🛡️ Guardrail L3: Auto-pull nonaktif. Klik tombol di bawah untuk verifikasi sintaks & terapkan:</i>"
+                                )
+                                markup = {
+                                    "inline_keyboard": [[
+                                        {"text": f"⚡ Terapkan ({check['remote_sha']})", "callback_data": f"gitops_apply:{full_sha}"},
+                                        {"text": "❌ Abaikan", "callback_data": f"gitops_ignore:{check['remote_sha']}"}
+                                    ]]
+                                }
+                                await self.send_text(session, self.authorized_chat_id, up_msg, reply_markup=markup)
 
                     # 4. Scheduled Executive Briefing (08:00 & 20:00 WIB regardless of server timezone)
                     from datetime import timezone, timedelta

@@ -30,6 +30,9 @@ VOICE_NAME_ID = os.getenv("VOICE_NAME_ID", "id-ID-GadisNeural")
 VOICE_NAME_EN = os.getenv("VOICE_NAME_EN", "en-US-JennyNeural")
 STT_MODEL = os.getenv("STT_MODEL", "whisper-large-v3")
 
+# GitOps Configuration
+GITOPS_BRANCH = os.getenv("GITOPS_BRANCH", "main")
+
 # Multi-Server Nodes
 SERVER1_HOST = os.getenv("SERVER1_HOST", "")
 SERVER1_TAILSCALE = os.getenv("SERVER1_TAILSCALE", "")
