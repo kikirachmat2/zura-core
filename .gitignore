@@ -1,0 +1,37 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Environment Variables & Secrets
+.env
+*.pem
+*.key
+*.id_rsa
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Databases & Backups
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+data/*.db
+data/backups/
+
+# Logs & Runtime
+*.log
+logs/
+.DS_Store
+
+# Temporary Audio
+temp_voice/
+*.ogg
+*.mp3
+*.wav
+
+*.csv
