@@ -59,12 +59,24 @@ TG_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 def _heartbeat_thread_worker(running_flag: list):
     """
     Dedicated OS background thread for heartbeats.
-    Survives any asyncio event loop blocks, updating SQLite 'last_ans_heartbeat' every 5s.
+    Only writes 'last_ans_heartbeat' IF the asyncio event loop is actively ticking
+    (i.e. 'loop_tick' in system_state was updated within the last 60 seconds).
+    If the event loop stalls or deadlocks, heartbeat stops to allow updater rollback.
     """
-    logger.info("💓 Dedicated OS Heartbeat Thread Online (interval: 5s)...")
+    logger.info("💓 Dedicated OS Heartbeat Thread Online (checking loop_tick every 5s)...")
     while running_flag[0]:
         try:
-            set_state("last_ans_heartbeat", str(time.time()))
+            raw_tick = get_state("loop_tick", 0)
+            try:
+                loop_tick = float(raw_tick)
+            except (ValueError, TypeError):
+                loop_tick = 0.0
+
+            now = time.time()
+            if (now - loop_tick) <= 60.0:
+                set_state("last_ans_heartbeat", str(now))
+            else:
+                logger.warning(f"Asyncio loop stalled (last tick was {now - loop_tick:.1f}s ago). Suppressing last_ans_heartbeat.")
         except Exception as e:
             logger.error(f"Heartbeat thread write error: {e}")
         time.sleep(5)
@@ -97,6 +109,8 @@ class ZuraOrchestrator:
         self.is_running = True
         self.last_briefing_hour = -1
         self.running_flag = [True]
+        # Seed initial loop_tick so heartbeat thread recognizes startup vitality
+        set_state("loop_tick", str(time.time()))
         # Start dedicated OS heartbeat thread
         self.heartbeat_thread = threading.Thread(
             target=_heartbeat_thread_worker,
@@ -545,15 +559,14 @@ class ZuraOrchestrator:
 
     async def heartbeat_loop(self):
         """
-        Lightweight heartbeat loop independent of heavy ANS tasks.
-        Updates SQLite system_state 'last_ans_heartbeat' every 5 seconds.
-        Used by zura_updater and fleet watchdog to verify process vitality.
+        Lightweight asyncio loop ticking every 5s.
+        Updates SQLite system_state 'loop_tick' to prove the async event loop is alive.
         """
         while True:
             try:
-                set_state("last_ans_heartbeat", str(time.time()))
+                set_state("loop_tick", str(time.time()))
             except Exception as e:
-                logger.error(f"Heartbeat write error: {e}")
+                logger.error(f"Asyncio loop_tick write error: {e}")
             await asyncio.sleep(5)
 
     async def run(self):

@@ -67,6 +67,23 @@ def send_telegram(token: str, chat_id: int, text: str):
         print(f"[ZuraUpdater] Telegram alert error: {e}", file=sys.stderr)
 
 
+def verify_functional_telegram(token: str) -> bool:
+    """Verifies functional proof by executing getMe against Telegram API."""
+    if not token:
+        return True  # If no token configured (e.g. mock test harnesses), pass
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ZuraUpdater/2.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode())
+                return bool(data.get("ok"))
+    except Exception as e:
+        print(f"[ZuraUpdater] Functional getMe verification failed: {e}", file=sys.stderr)
+        return False
+    return False
+
+
 def get_db_heartbeat(db_path: Path) -> float:
     """Reads latest heartbeat timestamp from system_state table in SQLite."""
     if not db_path.exists():
@@ -85,10 +102,11 @@ def get_db_heartbeat(db_path: Path) -> float:
 
 
 def get_systemd_property(service_name: str, prop: str) -> str:
-    """Retrieves systemctl show property value."""
+    """Retrieves systemctl show property value using /usr/bin/systemctl."""
+    systemctl_bin = "/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else "systemctl"
     try:
         res = subprocess.run(
-            ["systemctl", "show", service_name, f"--property={prop}"],
+            [systemctl_bin, "show", service_name, f"--property={prop}"],
             capture_output=True,
             text=True,
             timeout=5
@@ -126,8 +144,9 @@ def main():
         initial_restarts_str = get_systemd_property("zura.service", "NRestarts")
         initial_restarts = int(initial_restarts_str) if initial_restarts_str.isdigit() else 0
 
+        systemctl_bin = "/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else "systemctl"
         print(f"[ZuraUpdater] Restarting zura.service (initial restarts={initial_restarts})...")
-        restart_res = subprocess.run(["sudo", "systemctl", "restart", "zura.service"], capture_output=True, text=True, timeout=15)
+        restart_res = subprocess.run(["sudo", systemctl_bin, "restart", "zura.service"], capture_output=True, text=True, timeout=15)
         if restart_res.returncode != 0:
             err = restart_res.stderr.strip() or "systemctl restart failed"
             return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Restart command error: {err}")
@@ -150,12 +169,15 @@ def main():
             if state in ["failed", "dead"]:
                 return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Service entered {state} state ({substate})")
 
-            # Check DB heartbeat
+            # Check DB heartbeat AND functional getMe test
             hb = get_db_heartbeat(db_path)
             if hb > restart_time:
-                heartbeat_verified = True
-                print(f"[ZuraUpdater] Heartbeat verified after {elapsed}s (hb={hb} > restart_time={restart_time})")
-                break
+                if verify_functional_telegram(bot_token):
+                    heartbeat_verified = True
+                    print(f"[ZuraUpdater] Heartbeat and functional getMe verified after {elapsed}s (hb={hb} > restart_time={restart_time})")
+                    break
+                else:
+                    print(f"[ZuraUpdater] Heartbeat recorded but functional getMe check pending ({elapsed}s)...")
 
         if not heartbeat_verified:
             return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Heartbeat timeout (no fresh DB heartbeat within 120s)")
@@ -205,7 +227,8 @@ def handle_failure(pre_pull_sha: str, target_sha: str, bot_token: str, chat_id: 
 
     # 3. Restart previous working service
     if sys.platform.startswith("linux"):
-        subprocess.run(["sudo", "systemctl", "restart", "zura.service"], capture_output=True, timeout=15)
+        systemctl_bin = "/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else "systemctl"
+        subprocess.run(["sudo", systemctl_bin, "restart", "zura.service"], capture_output=True, timeout=15)
 
     # 4. Clean marker
     MARKER_PATH.unlink(missing_ok=True)

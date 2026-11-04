@@ -23,17 +23,24 @@ Enforces strict security boundary controls per Zura Charter v2:
 
 import socket
 import ssl
+import gzip
+import zlib
+import time
 import http.client
 import ipaddress
 import urllib.parse
+import re
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable
 
 logger = logging.getLogger("SafeFetch")
 
 MAX_RESPONSE_SIZE = 2 * 1024 * 1024  # 2 MB limit
 MAX_REDIRECT_HOPS = 3
 DEFAULT_TIMEOUT = 12
+
+# Test hook for monkeypatching socket creation in unit tests (avoids env flags in prod)
+_socket_create_connection_hook: Optional[Callable[..., socket.socket]] = None
 
 ALLOWED_SCHEMES = {"http", "https"}
 ALLOWED_PORTS = {80, 443}
@@ -211,8 +218,13 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
     """
     current_url = url
     hops = 0
+    start_time = time.time()
 
     while hops <= MAX_REDIRECT_HOPS:
+        # Check deadline
+        if (time.time() - start_time) > timeout:
+            raise SSRFSecurityError(f"Total operation deadline exceeded ({timeout}s limit)")
+
         scheme, hostname, port, path_and_query = validate_url_components(current_url)
         target_ip, all_resolved = resolve_and_validate_host(hostname, port)
 
@@ -220,12 +232,17 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
         conn = None
         try:
             # Connect socket DIRECTLY to the validated IP (prevents DNS rebinding)
-            sock = socket.create_connection((target_ip, port), timeout=timeout)
+            if _socket_create_connection_hook is not None:
+                sock = _socket_create_connection_hook((target_ip, port), timeout=timeout)
+            else:
+                sock = socket.create_connection((target_ip, port), timeout=timeout)
             sock.settimeout(timeout)
 
             if scheme == "https":
                 ssl_context = ssl.create_default_context()
-                # Wrap with SNI set to the validated hostname
+                ssl_context.check_hostname = True
+                ssl_context.verify_mode = ssl.CERT_REQUIRED
+                # Wrap with SNI and strict certificate verification for hostname
                 tls_sock = ssl_context.wrap_socket(sock, server_hostname=hostname)
                 conn = http.client.HTTPSConnection(hostname, port=port, timeout=timeout)
                 conn.sock = tls_sock
@@ -238,6 +255,7 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
                 "Host": hostname,
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 ZuraBot/2.0",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate",
                 "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
                 "Connection": "close"
             }
@@ -270,10 +288,13 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
                 if int(content_length_hdr) > MAX_RESPONSE_SIZE:
                     raise SSRFSecurityError(f"Content-Length {content_length_hdr} exceeds 2 MB response limit")
 
-            # Stream response body with hard 2 MB limit
+            # Stream response body with hard 2 MB limit and deadline check per chunk
             body_chunks = []
             total_bytes = 0
             while True:
+                if (time.time() - start_time) > timeout:
+                    raise SSRFSecurityError(f"Total response read deadline exceeded ({timeout}s limit)")
+
                 chunk = resp.read(65536)
                 if not chunk:
                     break
@@ -283,6 +304,22 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
                 body_chunks.append(chunk)
 
             raw_bytes = b"".join(body_chunks)
+
+            # Handle gzip / deflate decompression safely with size cap
+            content_encoding = (resp.getheader("Content-Encoding") or "").lower()
+            if "gzip" in content_encoding:
+                try:
+                    raw_bytes = gzip.decompress(raw_bytes)
+                except Exception as ge:
+                    raise SSRFSecurityError(f"Failed to decompress gzip content: {ge}")
+            elif "deflate" in content_encoding:
+                try:
+                    raw_bytes = zlib.decompress(raw_bytes)
+                except Exception as ze:
+                    raise SSRFSecurityError(f"Failed to decompress deflate content: {ze}")
+
+            if len(raw_bytes) > MAX_RESPONSE_SIZE:
+                raise SSRFSecurityError(f"Decompressed response size ({len(raw_bytes)} bytes) exceeds 2 MB safety cap")
 
             # Decode text
             charset = "utf-8"
@@ -294,8 +331,16 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
 
             text_content = raw_bytes.decode(charset, errors="replace")
 
+            # Sanitize any existing <untrusted_web> tags in payload to defeat prompt boundary injection
+            sanitized_text = re.sub(
+                r"<\s*/?\s*untrusted_web[^>]*>",
+                lambda m: m.group(0).replace("<", "&lt;").replace(">", "&gt;"),
+                text_content,
+                flags=re.IGNORECASE
+            )
+
             # Wrap in untrusted_web security envelope
-            wrapped_content = f"<untrusted_web>\n{text_content}\n</untrusted_web>"
+            wrapped_content = f"<untrusted_web>\n{sanitized_text}\n</untrusted_web>"
 
             return {
                 "success": True,
@@ -303,9 +348,9 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
                 "url": current_url,
                 "resolved_ip": target_ip,
                 "content_type": content_type,
-                "raw_text": text_content,
+                "raw_text": sanitized_text,
                 "wrapped_content": wrapped_content,
-                "size_bytes": total_bytes
+                "size_bytes": len(raw_bytes)
             }
 
         finally:
@@ -321,3 +366,4 @@ def safe_fetch_url(url: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
                     pass
 
     raise SSRFSecurityError("Failed to fetch web page: unexpected termination")
+

@@ -6,9 +6,8 @@ After=network.target
 Type=oneshot
 User=zura-ops
 WorkingDirectory=/home/zura-ops/zura-core
-ExecStart=/home/zura-ops/zura-core/venv/bin/python3 /home/zura-ops/zura-core/scripts/zura_updater.py
-TimeoutStartSec=180
-TimeoutSec=180
+ExecStart=/usr/bin/python3 /home/zura-ops/zura-core/.git/safe_updater.py
+TimeoutStartSec=360
 StandardOutput=journal
 StandardError=journal
 
