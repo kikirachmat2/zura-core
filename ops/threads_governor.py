@@ -20,6 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from core.memory import log_decision, set_state
+from core.actuator import actuate, ActuatorError
 
 logger = logging.getLogger("ThreadsGovernor")
 
@@ -166,25 +167,50 @@ class ThreadsGovernor:
             topic = slides[0][:80]
             slides_json = json.dumps(slides, ensure_ascii=False)
 
-            # Insert into stories table with status 'queued'
-            cursor.execute("""
-                INSERT INTO stories (title, topic, slides_json, product_name, product_url, status, origin, format_type)
-                VALUES (?, ?, ?, ?, ?, 'queued', 'zura_autonomous', 'story')
-            """, (title, topic, slides_json, p_name, p_url))
-            conn.commit()
-            story_id = cursor.lastrowid
-            conn.close()
+            def _do_insert():
+                cursor.execute("""
+                    INSERT INTO stories (title, topic, slides_json, product_name, product_url, status, origin, format_type)
+                    VALUES (?, ?, ?, ?, ?, 'queued', 'zura_autonomous', 'story')
+                """, (title, topic, slides_json, p_name, p_url))
+                conn.commit()
+                sid = cursor.lastrowid
+                conn.close()
+                return sid
 
+            def _revert_insert(sid):
+                try:
+                    with sqlite3.connect(str(self.db_path), timeout=5) as rconn:
+                        rconn.execute("DELETE FROM stories WHERE id = ?", (sid,))
+                        rconn.commit()
+                    return f"Deleted queued story ID {sid}"
+                except Exception as ex:
+                    return f"Failed to revert story {sid}: {ex}"
+
+            res = actuate(
+                name="threads_replenish_queue",
+                tier="L2",
+                fn=_do_insert,
+                params={"product": p_name, "category": p_cat, "title": title},
+                entity="threads_governor",
+                reason=f"Queue replenishment for {p_name}",
+                revert=lambda: _revert_insert(res.get("result")),
+                reversible=True
+            )
+
+            story_id = res.get("result")
             log_decision(
                 domain="Threads Governor",
                 trigger_event="Queue replenishment executed",
-                decision_taken=f"Auto-drafted and queued story ID {story_id} ({p_name})",
+                decision_taken=f"Auto-drafted and queued story ID {story_id} ({p_name}) via actuator",
                 outcome="Queue refreshed; ready for autopilot publishing"
             )
 
             logger.info(f"🎉 SUKSES! Zura berhasil queue cerita baru (ID: {story_id}) di Threads!")
             return {"success": True, "story_id": story_id, "title": title, "product": p_name}
 
+        except ActuatorError as ae:
+            logger.warning(f"Actuator blocked story replenish: {ae}")
+            return {"success": False, "error": str(ae)}
         except Exception as e:
             logger.error(f"Error replenishing story queue: {e}")
             return {"success": False, "error": str(e)}

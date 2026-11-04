@@ -24,6 +24,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from core.config import PERSONAL_HOTSPOT_SSID, PERSONAL_HOTSPOT_PASS
 from core.memory import log_decision, set_state
+from core.actuator import actuate, ActuatorError
 
 logger = logging.getLogger("AggressiveWifi")
 
@@ -74,7 +75,7 @@ class AggressiveWifiSentinel:
             return {"is_captive": False, "error": str(e)}
 
     def solve_captive_portal(self, portal_info: dict) -> bool:
-        """Attempts to auto-agree/submit coffeeshop splash page form."""
+        """Attempts to auto-agree/submit coffeeshop splash page form via actuator gateway (L2)."""
         html = portal_info.get("html", "")
         base_url = portal_info.get("url", "")
         if not html or not base_url:
@@ -104,7 +105,7 @@ class AggressiveWifiSentinel:
             "connect": "Hubungkan"
         })
 
-        try:
+        def _do_submit():
             encoded_data = urllib.parse.urlencode(payload).encode("utf-8")
             post_req = urllib.request.Request(
                 submit_url,
@@ -122,48 +123,84 @@ class AggressiveWifiSentinel:
             # Re-test captive status
             retest = self.check_captive_portal()
             if not retest.get("is_captive", True):
+                return True
+            raise RuntimeError("Captive portal retest still reports captive")
+
+        try:
+            res = actuate(
+                name="wifi_solve_captive_portal",
+                tier="L2",
+                fn=_do_submit,
+                params={"submit_url": submit_url},
+                entity="aggressive_wifi",
+                reason=f"Coffeeshop captive portal at {urlparse(base_url).netloc}",
+                reversible=False
+            )
+            if res.get("success"):
                 logger.info("🎉 CAPTIVE PORTAL BERHASIL DITEMBUS!")
                 log_decision(
                     domain="Aggressive Wi-Fi",
                     trigger_event=f"Coffeeshop captive portal at {urlparse(base_url).netloc}",
-                    decision_taken="Auto-submitted terms & login form",
+                    decision_taken="Auto-submitted terms & login form via actuator",
                     outcome="Internet unlocked without human intervention"
                 )
                 return True
+        except ActuatorError as ae:
+            logger.warning(f"Actuator blocked captive portal submit: {ae}")
         except Exception as e:
             logger.warning(f"Captive portal auto-submit failed: {e}")
 
         return False
 
     def failover_to_hotspot(self) -> bool:
-        """Keras-kerasan paksa sambung ke Hotspot HP saat Wi-Fi luar mati."""
+        """Keras-kerasan paksa sambung ke Hotspot HP saat Wi-Fi luar mati via actuator gateway (L2)."""
         logger.info(f"📡 Mencoba paksa failover ke Hotspot: '{PERSONAL_HOTSPOT_SSID}'...")
 
-        # 1. First attempt: switch airport network to personal hotspot
-        try:
-            cmd = ["networksetup", "-setairportnetwork", self.interface, PERSONAL_HOTSPOT_SSID]
-            if PERSONAL_HOTSPOT_PASS:
-                cmd.append(PERSONAL_HOTSPOT_PASS)
-            
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if res.returncode == 0:
-                time.sleep(3)
-                if self.has_internet():
-                    logger.info(f"✅ Berhasil tersambung ke Hotspot '{PERSONAL_HOTSPOT_SSID}'!")
-                    log_decision("Aggressive Wi-Fi", "Zero-internet on external Wi-Fi", f"Auto-connected to hotspot {PERSONAL_HOTSPOT_SSID}", "Internet restored")
-                    return True
-        except Exception as e:
-            logger.debug(f"Direct hotspot connection attempt: {e}")
+        def _do_failover():
+            # 1. First attempt: switch airport network to personal hotspot
+            try:
+                cmd = ["networksetup", "-setairportnetwork", self.interface, PERSONAL_HOTSPOT_SSID]
+                if PERSONAL_HOTSPOT_PASS:
+                    cmd.append(PERSONAL_HOTSPOT_PASS)
+                
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if res.returncode == 0:
+                    time.sleep(3)
+                    if self.has_internet():
+                        return "connected_directly"
+            except Exception as e:
+                logger.debug(f"Direct hotspot connection attempt: {e}")
 
-        # 2. Second attempt: trigger ADB to enable hotspot on POCO M3
+            # 2. Second attempt: trigger ADB to enable hotspot on POCO M3
+            try:
+                adb_test = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=3)
+                if "device" in adb_test.stdout:
+                    logger.info("⚡ Memerintahkan HP via ADB untuk bersiap tethering...")
+                    subprocess.run(["adb", "shell", "svc", "wifi", "disable"], timeout=3)
+                    subprocess.run(["adb", "shell", "svc", "data", "enable"], timeout=3)
+            except Exception:
+                pass
+
+            raise RuntimeError("Hotspot failover could not restore connection")
+
         try:
-            adb_test = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=3)
-            if "device" in adb_test.stdout:
-                logger.info("⚡ Memerintahkan HP via ADB untuk bersiap tethering...")
-                subprocess.run(["adb", "shell", "svc", "wifi", "disable"], timeout=3)
-                subprocess.run(["adb", "shell", "svc", "data", "enable"], timeout=3)
-        except Exception:
-            pass
+            res = actuate(
+                name="wifi_hotspot_failover",
+                tier="L2",
+                fn=_do_failover,
+                params={"ssid": PERSONAL_HOTSPOT_SSID},
+                entity="aggressive_wifi",
+                reason="Zero-internet on external Wi-Fi",
+                reversible=False
+            )
+            if res.get("success"):
+                logger.info(f"✅ Berhasil tersambung ke Hotspot '{PERSONAL_HOTSPOT_SSID}'!")
+                log_decision("Aggressive Wi-Fi", "Zero-internet on external Wi-Fi", f"Auto-connected to hotspot {PERSONAL_HOTSPOT_SSID} via actuator", "Internet restored")
+                return True
+        except ActuatorError as ae:
+            logger.warning(f"Actuator blocked hotspot failover: {ae}")
+        except Exception as e:
+            logger.debug(f"Hotspot failover attempt: {e}")
 
         return False
 

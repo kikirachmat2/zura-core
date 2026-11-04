@@ -8,7 +8,6 @@ Instinctive maintenance for MacBook Pro 2020:
 """
 
 import os
-import shutil
 import subprocess
 import psutil
 import time
@@ -17,6 +16,7 @@ import sys
 from pathlib import Path
 from core.config import MAC_TEMP_MAX_C, MAC_TEMP_MIN_C
 from core.memory import log_decision, set_state
+from core.actuator import actuate, actuate_command, actuate_cache_vacuum, ActuatorError
 
 logger = logging.getLogger("SystemSentinel")
 
@@ -108,70 +108,92 @@ class SystemSentinel:
 
                 # Condition 1: Direct runaway process exceeding 65% CPU
                 if cpu and cpu > self.RUNAWAY_CPU_PCT and not any(w in name.lower() for w in whitelist):
-                    os.system(f"renice +12 {pid} > /dev/null 2>&1")
-                    msg = f"Reniced runaway {name} (PID {pid}, CPU {cpu}%)"
-                    tamed.append(msg)
-                    log_decision("Sentinel", f"CPU Spike {cpu}% on {name}", "Reniced to lower priority (+12)", "Subdued")
+                    try:
+                        actuate_command(
+                            ["renice", "+12", str(pid)],
+                            name="mac_renice_process",
+                            tier="L1",
+                            entity="mac_sentinel",
+                            reason=f"CPU Spike {cpu}% on {name}",
+                            reversible=False
+                        )
+                        msg = f"Reniced runaway {name} (PID {pid}, CPU {cpu}%)"
+                        tamed.append(msg)
+                        log_decision("Sentinel", f"CPU Spike {cpu}% on {name}", "Reniced to lower priority (+12)", "Subdued")
+                    except ActuatorError as ae:
+                        logger.debug(f"Actuator blocked renice: {ae}")
 
                 # Condition 2: High load average overload - tame known background hogs
                 elif is_overloaded and any(h in name for h in background_hogs):
                     # Check current nice level, if not already lowered
                     if proc.info.get('nice', 0) < 10:
-                        os.system(f"renice +15 {pid} > /dev/null 2>&1")
-                        tamed.append(f"Deprioritized background worker {name} (PID {pid})")
-                        log_decision("Sentinel", f"System Load {round(load_1, 2)} > {self.LOAD_AVG_MAX}", f"Deprioritized {name}", "Freed CPU time for UI")
+                        try:
+                            actuate_command(
+                                ["renice", "+15", str(pid)],
+                                name="mac_renice_process",
+                                tier="L1",
+                                entity="mac_sentinel",
+                                reason=f"High load average {round(load_1, 2)}",
+                                reversible=False
+                            )
+                            tamed.append(f"Deprioritized background worker {name} (PID {pid})")
+                            log_decision("Sentinel", f"System Load {round(load_1, 2)} > {self.LOAD_AVG_MAX}", f"Deprioritized {name}", "Freed CPU time for UI")
+                        except ActuatorError as ae:
+                            logger.debug(f"Actuator blocked renice: {ae}")
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
         return tamed
 
     def silent_cache_vacuum(self, force: bool = False) -> float:
-        """Purges browser, editor, and build caches silently."""
-        total_freed_mb = 0.0
-
-        for c_dir in self.cache_dirs:
-            if c_dir.exists() and c_dir.is_dir():
-                try:
-                    # For /tmp or /var/tmp on linux, don't delete directory itself, only old files
-                    if c_dir in [Path("/tmp"), Path("/var/tmp")]:
-                        now = time.time()
-                        for f in c_dir.glob('*'):
-                            if f.is_file() and (now - f.stat().st_mtime > 86400 * 2): # older than 2 days
-                                sz = f.stat().st_size / (1024 * 1024)
-                                f.unlink(missing_ok=True)
-                                total_freed_mb += sz
-                        continue
-
-                    size_bytes = sum(f.stat().st_size for f in c_dir.glob('**/*') if f.is_file())
-                    size_mb = size_bytes / (1024 * 1024)
-
-                    if size_mb > 150.0 or force:
-                        shutil.rmtree(c_dir, ignore_errors=True)
-                        c_dir.mkdir(parents=True, exist_ok=True)
-                        total_freed_mb += size_mb
-                except Exception as e:
-                    logger.debug(f"Cache vacuum error on {c_dir}: {e}")
-
-        if total_freed_mb > 0:
-            log_decision("Sentinel", f"Cache accumulation ({round(total_freed_mb, 1)} MB)", "Silent purge executed", "Disk freed successfully")
-
-        return round(total_freed_mb, 2)
+        """Purges browser, editor, and build caches silently via actuator gateway."""
+        try:
+            total_freed_mb = actuate_cache_vacuum(self.cache_dirs, force=force, entity="mac_sentinel")
+            if total_freed_mb > 0:
+                log_decision("Sentinel", f"Cache accumulation ({round(total_freed_mb, 1)} MB)", "Silent purge executed", "Disk freed successfully")
+            return total_freed_mb
+        except ActuatorError as ae:
+            logger.debug(f"Actuator blocked cache vacuum: {ae}")
+            return 0.0
+        except Exception as e:
+            logger.debug(f"Cache vacuum error: {e}")
+            return 0.0
 
     def optimize_memory_pressure(self):
-        """Purges inactive disk cache if RAM usage exceeds 85%."""
+        """Purges inactive disk cache if RAM usage exceeds 85% via actuator gateway."""
         mem = psutil.virtual_memory()
         if mem.percent > 85.0:
             if self.is_mac:
                 try:
-                    subprocess.run(["purge"], capture_output=True, timeout=5)
+                    actuate_command(
+                        ["purge"],
+                        name="mac_memory_purge",
+                        tier="L1",
+                        entity="mac_sentinel",
+                        reason=f"High RAM Pressure ({mem.percent}%)",
+                        timeout=5,
+                        reversible=False
+                    )
                     log_decision("Sentinel", f"High RAM Pressure ({mem.percent}%)", "Executed macOS cache purge", "Inactive memory reclaimed")
+                except ActuatorError as ae:
+                    logger.debug(f"Actuator blocked memory purge: {ae}")
                 except Exception:
                     pass
             else:
-                # Linux: drop caches if possible or trigger garbage collection
+                # Linux: drop caches if possible or trigger sync
                 try:
-                    subprocess.run(["sync"], capture_output=True, timeout=3)
+                    actuate_command(
+                        ["sync"],
+                        name="mac_memory_purge",
+                        tier="L1",
+                        entity="mac_sentinel",
+                        reason=f"High RAM Pressure ({mem.percent}%)",
+                        timeout=5,
+                        reversible=False
+                    )
                     log_decision("Sentinel", f"High RAM Pressure ({mem.percent}%)", "Executed sync", "Buffer flushed")
+                except ActuatorError as ae:
+                    logger.debug(f"Actuator blocked memory sync: {ae}")
                 except Exception:
                     pass
 

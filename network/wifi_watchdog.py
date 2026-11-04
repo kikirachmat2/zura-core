@@ -13,6 +13,7 @@ import logging
 import sys
 from core.config import WIFI_MAX_LATENCY_MS
 from core.memory import log_decision, set_state
+from core.actuator import actuate, actuate_command, ActuatorError
 
 logger = logging.getLogger("WifiWatchdog")
 
@@ -62,31 +63,65 @@ class WifiWatchdog:
             return {"latency_ms": 999.0, "packet_loss_pct": 100.0, "is_laggy": True, "timestamp": time.time()}
 
     def flush_dns_cache(self) -> bool:
-        """Kuras cache DNS secara senyap sesuai OS (macOS / Linux)."""
-        try:
+        """Kuras cache DNS secara senyap sesuai OS via actuator gateway (L1)."""
+        def _do_flush():
             if self.is_mac:
                 subprocess.run(["dscacheutil", "-flushcache"], capture_output=True, timeout=3)
                 subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True, timeout=3)
             else:
                 subprocess.run(["resolvectl", "flush-caches"], capture_output=True, timeout=3)
-            
-            log_decision("Network Sentinel", "High DNS Jitter / Latency Detected", "Flushed DNS & route cache", "DNS resolution speed restored")
             return True
+
+        try:
+            res = actuate(
+                name="network_dns_flush",
+                tier="L1",
+                fn=_do_flush,
+                params={"platform": "macOS" if self.is_mac else "Linux"},
+                entity="wifi_watchdog",
+                reason="High DNS Jitter / Latency Detected",
+                reversible=False
+            )
+            log_decision("Network Sentinel", "High DNS Jitter / Latency Detected", "Flushed DNS & route cache via actuator", "DNS resolution speed restored")
+            return res.get("success", False)
+        except ActuatorError as ae:
+            logger.debug(f"Actuator blocked DNS flush: {ae}")
+            return False
         except Exception as e:
             logger.debug(f"DNS flush error: {e}")
             return False
 
     def reset_wifi_interface(self) -> bool:
-        """Re-associates Wi-Fi in 1.5 seconds to force re-connection to 5GHz (macOS only)."""
+        """Re-associates Wi-Fi to force re-connection to 5GHz via actuator gateway (L2)."""
         if not self.is_mac:
             return False
 
-        try:
+        def _do_cycle():
             subprocess.run(["networksetup", "-setairportpower", self.interface, "off"], capture_output=True, timeout=3)
             time.sleep(1.0)
             subprocess.run(["networksetup", "-setairportpower", self.interface, "on"], capture_output=True, timeout=3)
-            log_decision("Network Sentinel", "Wi-Fi Lag / Packet Loss Detected", f"Cycled {self.interface} interface", "Re-associated to optimum 5GHz BSSID")
             return True
+
+        def _revert_cycle():
+            subprocess.run(["networksetup", "-setairportpower", self.interface, "on"], capture_output=True, timeout=3)
+            return "Wi-Fi interface power restored on"
+
+        try:
+            res = actuate(
+                name="network_wifi_reconnect",
+                tier="L2",
+                fn=_do_cycle,
+                params={"interface": self.interface},
+                entity="wifi_watchdog",
+                reason="Wi-Fi Lag / Packet Loss Detected",
+                revert=_revert_cycle,
+                reversible=True
+            )
+            log_decision("Network Sentinel", "Wi-Fi Lag / Packet Loss Detected", f"Cycled {self.interface} interface via actuator", "Re-associated to optimum 5GHz BSSID")
+            return res.get("success", False)
+        except ActuatorError as ae:
+            logger.debug(f"Actuator blocked Wi-Fi cycle: {ae}")
+            return False
         except Exception as e:
             logger.debug(f"Wi-Fi cycle error: {e}")
             return False

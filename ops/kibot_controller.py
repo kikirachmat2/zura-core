@@ -21,6 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from core.memory import log_decision, set_state
+from core.actuator import actuate, ActuatorError, ActuatorApprovalRequired
 
 logger = logging.getLogger("KiBotController")
 
@@ -107,52 +108,100 @@ class KiBotController:
             logger.error(f"Error querying kibot_v3.db: {e}")
             return {"connected": False, "error": str(e)}
 
-    def tune_market_regime(self, regime: str, btc_pct: float = 0.70, eth_pct: float = 0.30) -> Dict[str, Any]:
-        """Autonomously adjusts KiBot allocation and limits based on market condition."""
-        logger.info(f"⚡ Tuning KiBot V3 parameters for market regime: {regime} ({btc_pct*100:.0f}% BTC / {eth_pct*100:.0f}% ETH)...")
+    def tune_market_regime(self, regime: str, btc_pct: float = 0.70, eth_pct: float = 0.30, max_trade_idr: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Adjusts KiBot allocation and limits based on market condition via actuator gateway.
+        Strict charter rule:
+        - Locked to two numbers: 750,000 IDR and 1,500,000 IDR (Autonomous L2).
+        - Outside these two numbers STRICTLY requires human approval (L3).
+        - Rate limit: 1x/hour.
+        - Backs up .env before write; params logged only as changed key.
+        """
+        target_val = max_trade_idr if max_trade_idr is not None else (1500000.0 if regime == "BULL" else 750000.0)
+        logger.info(f"⚡ Tuning KiBot V3 parameters for market regime: {regime} (Target: {target_val} IDR)...")
         
         env_file = self.env_path
         if not env_file or not env_file.exists():
             return {"success": False, "reason": "KiBot .env not accessible"}
 
-        try:
-            # Read current .env
+        # Guardrail: strict L3 approval if outside 750k / 1.5M
+        is_locked_val = target_val in [750000.0, 1500000.0]
+        tier = "L2" if is_locked_val else "L3"
+
+        backup_file = env_file.with_name(f"{env_file.name}.bak")
+
+        def _do_tune():
+            # 1. Backup .env before write
+            backup_file.write_text(env_file.read_text())
+
+            # 2. Modify only MAX_SINGLE_TRADE_IDR
             lines = env_file.read_text().splitlines()
             new_lines = []
-            keys_updated = set()
-
             for line in lines:
                 if line.startswith("MAX_SINGLE_TRADE_IDR="):
-                    # In volatile bear market, smaller bite sizes; in bull market, higher bite sizes
-                    new_val = 1500000.0 if regime == "BULL" else 750000.0
-                    new_lines.append(f"MAX_SINGLE_TRADE_IDR={new_val}")
-                    keys_updated.add("MAX_SINGLE_TRADE_IDR")
+                    new_lines.append(f"MAX_SINGLE_TRADE_IDR={target_val}")
                 else:
                     new_lines.append(line)
-
             env_file.write_text("\n".join(new_lines) + "\n")
 
-            # Restart KiBot systemd service if running on server
+            # 3. Trigger service restart via actuator (rate limited to 1x/hr)
             restart_output = "Skipped (not on server)"
             if sys.platform.startswith("linux"):
-                rc = subprocess.run(["sudo", "systemctl", "restart", "kibot-v3-core.service"], capture_output=True, text=True, timeout=10)
-                restart_output = "Restarted kibot-v3-core.service" if rc.returncode == 0 else f"Restart failed: {rc.stderr}"
+                def _do_restart():
+                    rc = subprocess.run(["sudo", "/usr/bin/systemctl", "restart", "kibot-v3-core.service"], capture_output=True, text=True, timeout=10)
+                    if rc.returncode != 0:
+                        raise RuntimeError(f"KiBot restart failed: {rc.stderr.strip()}")
+                    return "Restarted kibot-v3-core.service"
+
+                restart_res = actuate(
+                    name="kibot_restart_service",
+                    tier="L2",
+                    fn=_do_restart,
+                    params={"service": "kibot-v3-core.service"},
+                    entity="kibot_controller",
+                    reason=f"Restart after tuning MAX_SINGLE_TRADE_IDR to {target_val}",
+                    reversible=False
+                )
+                restart_output = str(restart_res.get("result", "Restarted"))
 
             log_decision(
                 domain="KiBot Controller",
                 trigger_event=f"Market regime evaluation: {regime}",
-                decision_taken=f"Tuned allocation ({btc_pct*100:.0f}/{eth_pct*100:.0f}) and trade limits",
+                decision_taken=f"Tuned MAX_SINGLE_TRADE_IDR to {target_val}",
                 outcome=restart_output
             )
-
             return {
-                "success": True,
                 "regime": regime,
                 "btc_pct": btc_pct,
                 "eth_pct": eth_pct,
+                "target_val": target_val,
                 "service_action": restart_output
             }
 
+        def _revert_tune():
+            if backup_file.exists():
+                env_file.write_text(backup_file.read_text())
+                if sys.platform.startswith("linux"):
+                    subprocess.run(["sudo", "/usr/bin/systemctl", "restart", "kibot-v3-core.service"], capture_output=True, text=True, timeout=10)
+                return "Restored KiBot .env from backup and restarted service"
+            return "No backup file found to restore"
+
+        try:
+            res = actuate(
+                name="kibot_tune_env",
+                tier=tier,
+                fn=_do_tune,
+                # ONLY log changed key and target value, NEVER full .env or secrets!
+                params={"changed_key": "MAX_SINGLE_TRADE_IDR", "value": target_val, "regime": regime},
+                entity="kibot_controller",
+                reason=f"Market regime tune {regime} -> {target_val} IDR",
+                revert=_revert_tune,
+                reversible=True
+            )
+            return res
+        except ActuatorError as ae:
+            logger.warning(f"Actuator blocked KiBot tuning: {ae}")
+            return {"success": False, "error": str(ae)}
         except Exception as e:
             logger.error(f"Failed to tune KiBot: {e}")
             return {"success": False, "error": str(e)}

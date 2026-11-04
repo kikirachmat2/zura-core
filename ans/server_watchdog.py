@@ -20,6 +20,7 @@ from core.config import (
     SERVER2_HOST, SERVER2_USER, SERVER2_KEY, SERVER_DISK_MAX_PCT, SERVER_RAM_MAX_PCT
 )
 from core.memory import log_decision, set_state
+from core.actuator import actuate, ActuatorError
 
 logger = logging.getLogger("ServerWatchdog")
 
@@ -181,26 +182,66 @@ class ServerWatchdog:
         # 1. Dead Service Auto-Restart (excluding voluntary dead)
         for svc, state in data.get("services", {}).items():
             if state == "DEAD" and svc not in ["zura"]:
-                logger.warning(f"🚨 {svc} is DEAD on {node_name}. Auto-restarting...")
-                restart_cmd = f"sudo systemctl restart {svc}"
-                rc, out = self._execute_command(node, restart_cmd, timeout=10)
-                log_decision(
-                    domain=f"Server Sentinel ({node['id']})",
-                    trigger_event=f"Service {svc} detected DEAD",
-                    decision_taken=f"Executed auto-restart",
-                    outcome="Service successfully restored" if rc == 0 else f"Restart attempt failed: {out}"
-                )
+                logger.warning(f"🚨 {svc} is DEAD on {node_name}. Routing restart through actuator...")
+                def _do_restart(s=svc, n=node):
+                    restart_cmd = f"sudo /usr/bin/systemctl restart {s}"
+                    rc, out = self._execute_command(n, restart_cmd, timeout=10)
+                    if rc != 0:
+                        raise RuntimeError(f"Service {s} restart failed: {out}")
+                    return out
+
+                action_name = "kibot_restart_service" if svc == "kibot-v3-core" else "server_restart_service"
+                try:
+                    res = actuate(
+                        name=action_name,
+                        tier="L2",
+                        fn=_do_restart,
+                        params={"node": node.get("id"), "service": svc},
+                        entity=f"server_sentinel_{node.get('id')}",
+                        reason=f"Service {svc} detected DEAD on {node_name}",
+                        reversible=False
+                    )
+                    log_decision(
+                        domain=f"Server Sentinel ({node['id']})",
+                        trigger_event=f"Service {svc} detected DEAD",
+                        decision_taken="Executed auto-restart via actuator",
+                        outcome="Service successfully restored" if res.get("success") else str(res)
+                    )
+                except ActuatorError as ae:
+                    logger.warning(f"Actuator blocked restart for {svc}: {ae}")
+                except Exception as e:
+                    logger.error(f"Restart error for {svc}: {e}")
 
         # 2. Disk Vacuum if threshold breached
         if data.get("disk_used_pct", 0) > SERVER_DISK_MAX_PCT:
-            vacuum_cmd = "sudo journalctl --vacuum-size=150M"
-            self._execute_command(node, vacuum_cmd, timeout=15)
-            log_decision(
-                domain=f"Server Sentinel ({node['id']})",
-                trigger_event=f"Disk usage breached {data['disk_used_pct']}% threshold",
-                decision_taken="Executed journalctl vacuum",
-                outcome="Storage capacity stabilized"
-            )
+            logger.warning(f"⚠️ Disk usage breached {data['disk_used_pct']}% threshold. Routing vacuum through actuator...")
+            def _do_vacuum(n=node):
+                vacuum_cmd = "sudo /usr/bin/journalctl --vacuum-size=150M"
+                rc, out = self._execute_command(n, vacuum_cmd, timeout=15)
+                if rc != 0:
+                    raise RuntimeError(f"Vacuum failed: {out}")
+                return out
+
+            try:
+                res = actuate(
+                    name="server_vacuum_logs",
+                    tier="L1",
+                    fn=_do_vacuum,
+                    params={"node": node.get("id")},
+                    entity=f"server_sentinel_{node.get('id')}",
+                    reason=f"Disk usage breached {data['disk_used_pct']}% threshold",
+                    reversible=False
+                )
+                log_decision(
+                    domain=f"Server Sentinel ({node['id']})",
+                    trigger_event=f"Disk usage breached {data['disk_used_pct']}% threshold",
+                    decision_taken="Executed journalctl vacuum via actuator",
+                    outcome="Storage capacity stabilized"
+                )
+            except ActuatorError as ae:
+                logger.warning(f"Actuator blocked vacuum: {ae}")
+            except Exception as e:
+                logger.error(f"Vacuum error: {e}")
 
     def probe_all_servers(self) -> List[Dict[str, Any]]:
         """Audits all configured server nodes and caches state."""

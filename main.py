@@ -40,6 +40,11 @@ from ops.sheets_sync import sheets_sync
 from ops.web_agent import web_agent
 from ops.evolution_engine import evolution_engine
 from network.wifi_watchdog import wifi_watchdog
+from core.actuator import (
+    actuate, is_system_paused, set_system_paused,
+    execute_approved_action, reject_approved_action, undo_action,
+    register_notifier
+)
 
 # Setup logging
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,6 +85,71 @@ def _heartbeat_thread_worker(running_flag: list):
         except Exception as e:
             logger.error(f"Heartbeat thread write error: {e}")
         time.sleep(5)
+
+
+def _actuator_telegram_notifier(tier: str, data: dict):
+    """Delivers real-time L2 execution notices and Hark-style L3 approval buttons."""
+    try:
+        import urllib.request
+        import json
+        chat_id = TELEGRAM_CHAT_ID
+        if tier == "L3":
+            action_id = data["action_id"]
+            name = data["name"]
+            entity = data["entity"]
+            reason = data.get("reason", "")
+            params = json.dumps(data.get("params", {}), ensure_ascii=False)
+            text = (
+                f"🛡️ <b>PERSETUJUAN AKSI (L3) DIPERLUKAN:</b>\n\n"
+                f"• <b>Aksi:</b> <code>{name}</code>\n"
+                f"• <b>Entity:</b> <code>{entity}</code>\n"
+                f"• <b>Alasan:</b> {reason}\n"
+                f"• <b>Parameter:</b> <code>{params}</code>\n"
+                f"• <b>Action ID:</b> <code>{action_id}</code>\n\n"
+                f"<i>Permintaan ini kedaluwarsa otomatis dalam 10 menit.</i>"
+            )
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": f"✅ Setujui ({action_id})", "callback_data": f"act_appr:{action_id}"},
+                        {"text": f"🚫 Tolak ({action_id})", "callback_data": f"act_rej:{action_id}"}
+                    ]
+                ]
+            }
+        elif tier == "L2":
+            action_id = data["action_id"]
+            name = data["name"]
+            entity = data["entity"]
+            reason = data.get("reason", "")
+            reversible = data.get("reversible", False)
+            undo_note = f"\n\n<i>Bisa di-undo via:</i> <code>/undo {action_id}</code>" if reversible else ""
+            text = (
+                f"⚡ <b>AKSI OTONOM (L2) DIEKSEKUSI:</b>\n\n"
+                f"• <b>Aksi:</b> <code>{name}</code>\n"
+                f"• <b>Entity:</b> <code>{entity}</code>\n"
+                f"• <b>Alasan:</b> {reason}\n"
+                f"• <b>Action ID:</b> <code>{action_id}</code>"
+                f"{undo_note}"
+            )
+            markup = None
+        else:
+            return
+
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        if markup:
+            payload["reply_markup"] = markup
+
+        req = urllib.request.Request(
+            f"{TG_API_BASE}/sendMessage",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        logger.warning(f"Failed to deliver actuator Telegram alert: {e}")
+
+# Register global notifier
+register_notifier(_actuator_telegram_notifier)
 
 
 def get_executive_menu_markup() -> dict:
@@ -275,6 +345,38 @@ class ZuraOrchestrator:
         elif data.startswith("gitops_ignore:"):
             ignored_sha = data.split(":", 1)[1]
             await self.send_text(session, chat_id, f"ℹ️ Pembaruan commit <code>{ignored_sha}</code> diabaikan.")
+        elif data == "act_resume_confirm":
+            set_system_paused(False)
+            resume_msg = (
+                "▶️ <b>SISTEM ZURA DI-RESUME:</b>\n\n"
+                "Kill Switch dinonaktifkan. Semua subsistem otonom Zura (restart service, pembersihan cache, DNS flush, antrean Threads, tuning KiBot) telah aktif kembali."
+            )
+            await self.send_text(session, chat_id, resume_msg, reply_markup=get_executive_menu_markup())
+        elif data.startswith("act_appr:"):
+            action_id = data.split(":", 1)[1]
+            res = execute_approved_action(action_id, user_id)
+            if res.get("success"):
+                appr_msg = (
+                    f"✅ <b>AKSI L3 DISETUJUI & DIEKSEKUSI!</b>\n\n"
+                    f"• <b>Action ID:</b> <code>{action_id}</code>\n"
+                    f"• <b>Hasil:</b> <code>{res.get('result')}</code>"
+                )
+                await self.send_text(session, chat_id, appr_msg, reply_markup=get_executive_menu_markup())
+            else:
+                fail_msg = (
+                    f"❌ <b>EKSEKUSI GAGAL / KEDALUWARSA:</b>\n\n"
+                    f"• <b>Action ID:</b> <code>{action_id}</code>\n"
+                    f"• <b>Penyebab:</b> {res.get('error')}"
+                )
+                await self.send_text(session, chat_id, fail_msg, reply_markup=get_executive_menu_markup())
+        elif data.startswith("act_rej:"):
+            action_id = data.split(":", 1)[1]
+            res = reject_approved_action(action_id, user_id)
+            rej_msg = (
+                f"🚫 <b>AKSI L3 DIBATALKAN:</b>\n\n"
+                f"Permintaan aksi <code>{action_id}</code> telah ditolak dan dibatalkan dari antrean."
+            )
+            await self.send_text(session, chat_id, rej_msg, reply_markup=get_executive_menu_markup())
 
     async def handle_user_message(self, session: aiohttp.ClientSession, message: dict):
         """Dispatches incoming text or voice message."""
@@ -308,6 +410,55 @@ class ZuraOrchestrator:
         logger.info(f"📩 Input from Kiki: '{text}'")
 
         # Command Dispatcher
+        if text.strip().lower() in ["/pause", "pause"]:
+            set_system_paused(True)
+            pause_msg = (
+                "🛑 <b>KILL SWITCH DIAKTIFKAN:</b>\n\n"
+                "Sistem Zura sekarang dalam status <b>PAUSED</b> (fail-closed).\n"
+                "Semua aksi mutasi (restart service, cache purge, wifi cycle, replikasi Threads, tuning KiBot) diblokir total sampai di-resume.\n\n"
+                "Ketik <code>/resume</code> untuk membuka kunci kembali."
+            )
+            await self.send_text(session, chat_id, pause_msg)
+            return
+
+        if text.strip().lower() in ["/resume", "resume"]:
+            confirm_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ Ya, Buka Kunci (RESUME)", "callback_data": "act_resume_confirm"}
+                    ]
+                ]
+            }
+            confirm_msg = (
+                "⚠️ <b>KONFIRMASI PEMBUKAAN KEMBALI (RESUME):</b>\n\n"
+                "Apakah lu yakin mau menonaktifkan Kill Switch dan mengaktifkan kembali semua aksi otonom Zura?"
+            )
+            await self.send_text(session, chat_id, confirm_msg, reply_markup=confirm_markup)
+            return
+
+        if text.strip().lower().startswith("/undo"):
+            parts = text.strip().split()
+            if len(parts) < 2:
+                await self.send_text(session, chat_id, "ℹ️ Format salah. Gunakan: <code>/undo [action_id]</code>")
+                return
+            target_id = parts[1].strip()
+            res = undo_action(target_id)
+            if res.get("success"):
+                undo_msg = (
+                    f"↩️ <b>AKSI BERHASIL DI-REVERT (UNDO):</b>\n\n"
+                    f"• <b>Action ID:</b> <code>{target_id}</code>\n"
+                    f"• <b>Detail:</b> <code>{res.get('undo_result')}</code>"
+                )
+                await self.send_text(session, chat_id, undo_msg, reply_markup=get_executive_menu_markup())
+            else:
+                undo_fail = (
+                    f"⚠️ <b>GAGAL MENJALANKAN UNDO:</b>\n\n"
+                    f"• <b>Action ID:</b> <code>{target_id}</code>\n"
+                    f"• <b>Alasan:</b> {res.get('error')}"
+                )
+                await self.send_text(session, chat_id, undo_fail, reply_markup=get_executive_menu_markup())
+            return
+
         if text.lower() in ["/evolve", "evolve", "/takeover", "takeover"]:
             report = evolution_engine.run_full_evolution_cycle()
             await self.send_text(session, chat_id, report, reply_markup=get_executive_menu_markup())
