@@ -53,13 +53,14 @@ def set_actuator_db_path(path: Optional[Path]):
 
 
 # Rate limit registry: actuator_name -> minimum seconds between executions
+# Reads from config/limits.env via core.config with fail-safe defaults
 RATE_LIMITS: Dict[str, float] = {
-    "server_restart_service": 3600.0,  # Max 1 restart per hour
-    "kibot_restart_service": 3600.0,   # Max 1 restart per hour
-    "kibot_tune_env": 3600.0,          # Max 1 config tune per hour
-    "network_wifi_reconnect": 300.0,   # Max 1 wifi heal per 5 mins
-    "mac_purge_cache": 600.0,          # Max 1 vacuum per 10 mins
-    "threads_replenish_queue": 180.0,  # Max 1 replenish per 3 mins
+    "server_restart_service": getattr(config, "RATE_LIMIT_SERVER_RESTART_SEC", 3600.0),
+    "kibot_restart_service": getattr(config, "RATE_LIMIT_KIBOT_RESTART_SEC", 3600.0),
+    "kibot_tune_env": getattr(config, "RATE_LIMIT_KIBOT_TUNE_SEC", 3600.0),
+    "network_wifi_reconnect": getattr(config, "RATE_LIMIT_WIFI_RECONNECT_SEC", 300.0),
+    "mac_purge_cache": getattr(config, "RATE_LIMIT_MAC_PURGE_CACHE_SEC", 600.0),
+    "threads_replenish_queue": getattr(config, "RATE_LIMIT_THREADS_REPLENISH_SEC", 180.0),
     "gitops_apply_update": 60.0,       # Cooldown 1 min between updates
 }
 

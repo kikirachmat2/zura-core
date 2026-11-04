@@ -10,9 +10,56 @@ from dotenv import load_dotenv
 # Base Directory of Personal AI
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env file
+# 1. Load limits.env (Non-secret operational thresholds & rate limits)
+LIMITS_PATH = BASE_DIR / "config/limits.env"
+if LIMITS_PATH.exists():
+    load_dotenv(dotenv_path=LIMITS_PATH, override=False)
+
+# 2. Load .env file (Secret keys & private tokens)
 ENV_PATH = BASE_DIR / ".env"
-load_dotenv(dotenv_path=ENV_PATH)
+if ENV_PATH.exists():
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
+
+
+def enforce_file_permissions(strict: bool = False) -> dict:
+    """
+    Enforces strict file permissions per Zura Charter v2 (Fase 0.6):
+    - .env must be chmod 0600 (owner read/write only)
+    - data/ directory must be chmod 0700 (owner access only)
+    """
+    results = {}
+    if ENV_PATH.exists():
+        current_mode = ENV_PATH.stat().st_mode & 0o777
+        if current_mode & 0o077:  # Group or others have read/write/execute
+            try:
+                os.chmod(ENV_PATH, 0o600)
+                results["env_permissions"] = f"tightened_to_0600 (was {oct(current_mode)})"
+            except Exception as e:
+                results["env_permissions"] = f"failed_to_chmod: {e}"
+                if strict:
+                    raise PermissionError(f"Insecure .env permissions ({oct(current_mode)}): {e}")
+        else:
+            results["env_permissions"] = "secure_0600"
+
+    data_dir = BASE_DIR / "data"
+    if data_dir.exists():
+        current_mode = data_dir.stat().st_mode & 0o777
+        if current_mode & 0o077:
+            try:
+                os.chmod(data_dir, 0o700)
+                results["data_dir_permissions"] = f"tightened_to_0700 (was {oct(current_mode)})"
+            except Exception as e:
+                results["data_dir_permissions"] = f"failed_to_chmod: {e}"
+                if strict:
+                    raise PermissionError(f"Insecure data/ permissions ({oct(current_mode)}): {e}")
+        else:
+            results["data_dir_permissions"] = "secure_0700"
+
+    return results
+
+
+# Apply permission hardening on load
+enforce_file_permissions(strict=False)
 
 # Telegram Bot
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -61,6 +108,19 @@ WIFI_MAX_LATENCY_MS = float(os.getenv("WIFI_MAX_LATENCY_MS", "90.0"))
 # Personal Hotspot Failover
 PERSONAL_HOTSPOT_SSID = os.getenv("PERSONAL_HOTSPOT_SSID", "PersonalHotspot")
 PERSONAL_HOTSPOT_PASS = os.getenv("PERSONAL_HOTSPOT_PASS", "")
+
+# Rate Limits (Cooldowns in Seconds)
+RATE_LIMIT_SERVER_RESTART_SEC = float(os.getenv("RATE_LIMIT_SERVER_RESTART_SEC", "3600.0"))
+RATE_LIMIT_KIBOT_RESTART_SEC = float(os.getenv("RATE_LIMIT_KIBOT_RESTART_SEC", "3600.0"))
+RATE_LIMIT_KIBOT_TUNE_SEC = float(os.getenv("RATE_LIMIT_KIBOT_TUNE_SEC", "3600.0"))
+RATE_LIMIT_WIFI_RECONNECT_SEC = float(os.getenv("RATE_LIMIT_WIFI_RECONNECT_SEC", "300.0"))
+RATE_LIMIT_MAC_PURGE_CACHE_SEC = float(os.getenv("RATE_LIMIT_MAC_PURGE_CACHE_SEC", "600.0"))
+RATE_LIMIT_THREADS_REPLENISH_SEC = float(os.getenv("RATE_LIMIT_THREADS_REPLENISH_SEC", "180.0"))
+
+# Threads & Content Governance Limits
+THREADS_DAILY_REPLENISH_CAP = int(os.getenv("THREADS_DAILY_REPLENISH_CAP", "5"))
+THREADS_MIN_QUEUE_THRESHOLD = int(os.getenv("THREADS_MIN_QUEUE_THRESHOLD", "2"))
+THREADS_ANGER_CRITICISM_THRESHOLD_PCT = float(os.getenv("THREADS_ANGER_CRITICISM_THRESHOLD_PCT", "25.0"))
 
 # Database & Storage
 DATA_DIR = BASE_DIR / "data"
