@@ -477,11 +477,23 @@ class ZuraOrchestrator:
                             last_notified = get_state("last_notified_gitops_sha", "")
                             if last_notified != full_sha:
                                 set_state("last_notified_gitops_sha", full_sha)
+                                warn_section = ""
+                                if check.get("warnings"):
+                                    warn_section = "\n\n<b>PERINGATAN AUDIT KEAMANAN:</b>\n" + "\n".join(check["warnings"])
+
+                                stat_section = ""
+                                if check.get("diff_stat"):
+                                    stat_section = f"\n\n<b>Ringkasan Diff:</b>\n<code>{check['diff_stat'][:300]}</code>"
+
                                 up_msg = (
                                     f"🚨 <b>PEMBARUAN KODE TERSEDIA DI GITHUB:</b>\n\n"
                                     f"• <b>Branch:</b> <code>{check['branch']}</code>\n"
                                     f"• <b>Commit Remote:</b> <code>{check['remote_sha']}</code>\n"
-                                    f"• <b>Commit Lokal:</b> <code>{check['local_sha']}</code>\n\n"
+                                    f"• <b>Pesan:</b> <i>{check.get('commit_message', 'No message')}</i>\n"
+                                    f"• <b>Author:</b> <code>{check.get('author', 'Unknown')}</code>\n"
+                                    f"• <b>Commit Lokal:</b> <code>{check['local_sha']}</code>"
+                                    f"{stat_section}"
+                                    f"{warn_section}\n\n"
                                     f"<i>🛡️ Guardrail L3: Auto-pull nonaktif. Klik tombol di bawah untuk verifikasi sintaks & terapkan:</i>"
                                 )
                                 markup = {

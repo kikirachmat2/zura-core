@@ -39,12 +39,11 @@ class TestGitOpsStep01(unittest.TestCase):
         self.assertEqual(res["stage"], "validation" if len("non_existent_sha_1234567") < 7 else "git_fetch" if "fetch" in res["stage"] else res["stage"])
         print(f"  [PASS] Invalid SHA rejected gracefully: {res}")
 
-    def test_deprecated_method_does_not_pull(self):
-        res = self.watcher.check_and_apply_update()
-        self.assertIsInstance(res, dict)
-        self.assertNotIn("updated", res, "Should not return autonomous 'updated' key")
-        print(f"  [PASS] check_and_apply_update safe wrapper confirmed: {res}")
+    def test_deprecated_method_removed(self):
+        self.assertFalse(hasattr(self.watcher, "check_and_apply_update"), "Deprecated method check_and_apply_update should be removed")
+        print("  [PASS] check_and_apply_update confirmed removed.")
 
 
 if __name__ == "__main__":
     unittest.main()
+
