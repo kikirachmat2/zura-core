@@ -1,6 +1,6 @@
 """
 core/actuator.py - Centralized Single-Door Actuator & Audit Gateway
-Per Zura Charter v2 (Fase 0.5):
+Per Zura Charter v2 (Fase 0.5 & 0.5b):
 Every state-mutating action (service restarts, file/env modification, network reconfiguration,
 outbound posting/replenish, deletion) MUST pass exclusively through actuate().
 
@@ -12,8 +12,9 @@ Key Guarantees:
    - L1: Autonomous execution with audit logging.
    - L2: Autonomous execution + post-action notification (supports /undo if reversible).
    - L3: Explicit human approval required via single-use Telegram button (expires in 10 minutes).
-5. Centralized Rate Limiting: Enforced per actuator name (e.g. service restarts max 1x/hr).
-6. /undo <action_id>: Reverts reversible actions through actuate() with dedicated audit entry.
+5. Centralized Persistent Rate Limiting: Composite key (action_name, host, service) stored in SQLite.
+6. Revenue-Critical Circuit Breaker: Sends one-time Telegram alert when throttled.
+7. /undo <action_id>: Reverts reversible actions through actuate() with dedicated audit entry.
 """
 
 import os
@@ -26,7 +27,7 @@ import sqlite3
 import shutil
 import subprocess
 import logging
-from typing import Callable, Any, Dict, Optional, Tuple, List
+from typing import Callable, Any, Dict, Optional, Tuple, List, Set
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -36,6 +37,21 @@ import core.config as config
 
 logger = logging.getLogger("ActuatorGateway")
 
+# Optional injected DB path (for test isolation)
+_CUSTOM_DB_PATH: Optional[Path] = None
+
+
+def get_db_path() -> Path:
+    """Returns injected custom DB path or default from config."""
+    return _CUSTOM_DB_PATH if _CUSTOM_DB_PATH is not None else config.DB_PATH
+
+
+def set_actuator_db_path(path: Optional[Path]):
+    """Sets custom DB path for test isolation."""
+    global _CUSTOM_DB_PATH
+    _CUSTOM_DB_PATH = path
+
+
 # Rate limit registry: actuator_name -> minimum seconds between executions
 RATE_LIMITS: Dict[str, float] = {
     "server_restart_service": 3600.0,  # Max 1 restart per hour
@@ -44,7 +60,18 @@ RATE_LIMITS: Dict[str, float] = {
     "network_wifi_reconnect": 300.0,   # Max 1 wifi heal per 5 mins
     "mac_purge_cache": 600.0,          # Max 1 vacuum per 10 mins
     "threads_replenish_queue": 180.0,  # Max 1 replenish per 3 mins
+    "gitops_apply_update": 60.0,       # Cooldown 1 min between updates
 }
+
+# Revenue-critical actions subject to circuit-breaker alerts
+REVENUE_CRITICAL_ACTIONS: Set[str] = {
+    "kibot_tune_env",
+    "kibot_restart_service",
+    "threads_replenish_queue",
+}
+
+# In-memory circuit breaker alert tracker: (action_name, host, service)
+_CIRCUIT_BREAKER_TRIGGERED: Set[Tuple[str, str, str]] = set()
 
 # In-memory store for pending L3 approvals: action_id -> dict
 PENDING_APPROVALS: Dict[str, Dict[str, Any]] = {}
@@ -54,6 +81,22 @@ REVERT_REGISTRY: Dict[str, Callable] = {}
 
 # Optional notifier hook (registered by main.py)
 _NOTIFIER_HOOK: Optional[Callable] = None
+
+# Strict whitelist for mac_purge_cache directories
+ALLOWED_CACHE_WHITELIST: Set[str] = {
+    "com.apple.Safari",
+    "com.operasoftware.Opera",
+    "com.microsoft.VSCode",
+    "Google/Chrome",
+    "com.spotify.client",
+    "antigravity-updater",
+    "GeoServices",
+    "pip",
+    "_cacache",
+    ".cache",
+    "/tmp",
+    "/var/tmp"
+}
 
 # Patterns for scrubbing secrets and sensitive data
 SECRET_KEY_PATTERN = re.compile(r"(token|secret|password|pass|key|credential|auth|cert)", re.IGNORECASE)
@@ -96,12 +139,13 @@ def register_notifier(fn: Callable):
     _NOTIFIER_HOOK = fn
 
 
-def init_actuator_db():
-    """Initializes actuator audit log table and system state table."""
+def init_actuator_db(db_path: Optional[Path] = None):
+    """Initializes actuator audit log, system state, and persistent rate limits tables."""
+    target_db = db_path or get_db_path()
     try:
-        if not config.DB_PATH.parent.exists():
-            config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(str(config.DB_PATH), timeout=5) as conn:
+        if not target_db.parent.exists():
+            target_db.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(str(target_db), timeout=5) as conn:
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS actuator_audit_log (
@@ -124,6 +168,15 @@ def init_actuator_db():
                     key TEXT PRIMARY KEY,
                     value TEXT,
                     updated_at REAL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS actuator_rate_limits (
+                    action_name TEXT NOT NULL,
+                    host TEXT NOT NULL DEFAULT 'localhost',
+                    service TEXT NOT NULL DEFAULT 'default',
+                    last_executed REAL NOT NULL,
+                    PRIMARY KEY (action_name, host, service)
                 )
             """)
             conn.commit()
@@ -160,10 +213,11 @@ def is_system_paused() -> bool:
     Checks if Kill Switch is active.
     FAIL-CLOSED: If DB cannot be accessed or throws error, returns True (treats as paused).
     """
+    db_file = get_db_path()
     try:
-        if not config.DB_PATH.exists():
+        if not db_file.exists():
             return True  # Fail-closed: missing DB treated as paused
-        with sqlite3.connect(str(config.DB_PATH), timeout=3) as conn:
+        with sqlite3.connect(str(db_file), timeout=3) as conn:
             cur = conn.cursor()
             cur.execute("SELECT value FROM system_state WHERE key = 'system_paused'")
             row = cur.fetchone()
@@ -178,7 +232,8 @@ def is_system_paused() -> bool:
 
 def set_system_paused(paused: bool):
     """Sets persistent Kill Switch state."""
-    with sqlite3.connect(str(config.DB_PATH), timeout=5) as conn:
+    db_file = get_db_path()
+    with sqlite3.connect(str(db_file), timeout=5) as conn:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO system_state (key, value, updated_at)
@@ -188,16 +243,16 @@ def set_system_paused(paused: bool):
         conn.commit()
 
 
-def get_last_actuator_execution(action_name: str) -> float:
-    """Reads latest execution timestamp for an action from audit log."""
+def get_persistent_rate_limit(action_name: str, host: str = "localhost", service: str = "default") -> float:
+    """Reads persistent rate limit execution timestamp from SQLite composite key."""
+    db_file = get_db_path()
     try:
-        with sqlite3.connect(str(config.DB_PATH), timeout=3) as conn:
+        with sqlite3.connect(str(db_file), timeout=3) as conn:
             cur = conn.cursor()
             cur.execute("""
-                SELECT timestamp FROM actuator_audit_log
-                WHERE action_name = ? AND status = 'EXECUTED'
-                ORDER BY timestamp DESC LIMIT 1
-            """, (action_name,))
+                SELECT last_executed FROM actuator_rate_limits
+                WHERE action_name = ? AND host = ? AND service = ?
+            """, (action_name, host, service))
             row = cur.fetchone()
             if row and row[0]:
                 return float(row[0])
@@ -206,14 +261,32 @@ def get_last_actuator_execution(action_name: str) -> float:
     return 0.0
 
 
+def record_persistent_rate_limit(action_name: str, host: str = "localhost", service: str = "default", ts: Optional[float] = None):
+    """Writes persistent execution timestamp for composite key in SQLite."""
+    db_file = get_db_path()
+    exec_ts = ts if ts is not None else time.time()
+    try:
+        with sqlite3.connect(str(db_file), timeout=5) as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO actuator_rate_limits (action_name, host, service, last_executed)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(action_name, host, service) DO UPDATE SET last_executed=excluded.last_executed
+            """, (action_name, host, service, exec_ts))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to record persistent rate limit: {e}")
+
+
 def record_audit(action_id: str, entity: str, action_name: str, reason: str,
                  tier: str, params_before: Any, params_after: Any, revert_cmd: str,
                  reversible: bool, status: str, error: str = ""):
     """Writes or updates audit row in SQLite."""
     san_before = json.dumps(sanitize_value(params_before))
     san_after = json.dumps(sanitize_value(params_after))
+    db_file = get_db_path()
     try:
-        with sqlite3.connect(str(config.DB_PATH), timeout=5) as conn:
+        with sqlite3.connect(str(db_file), timeout=5) as conn:
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO actuator_audit_log
@@ -244,7 +317,7 @@ def actuate(name: str,
             reversible: bool = True) -> Dict[str, Any]:
     """
     Central single-door gateway for all state-mutating actions.
-    Enforces Kill Switch, audit logging, rate limiting, and approval tiers.
+    Enforces Kill Switch, audit logging, composite persistent rate limiting, and approval tiers.
     """
     if params is None:
         params = {}
@@ -252,20 +325,39 @@ def actuate(name: str,
     action_id = str(uuid.uuid4())[:8]
     tier = tier.upper()
 
+    host = str(params.get("host") or params.get("node") or "localhost")
+    service = str(params.get("service") or params.get("changed_key") or "default")
+
     # 1. Kill Switch Check (Fail-closed)
     if is_system_paused():
         record_audit(action_id, entity, name, reason, tier, params, None, revert_cmd, reversible, "BLOCKED_PAUSED", "Kill switch /pause active")
         raise ActuatorPausedError(f"Action '{name}' blocked: System is in PAUSED / Kill-Switch state.")
 
-    # 2. Centralized Rate Limit Check
+    # 2. Centralized Persistent Rate Limit Check (action_name, host, service)
     if name in RATE_LIMITS:
         cooldown = RATE_LIMITS[name]
-        last_exec = get_last_actuator_execution(name)
+        last_exec = get_persistent_rate_limit(name, host, service)
         elapsed = time.time() - last_exec
         if elapsed < cooldown:
             wait_rem = int(cooldown - elapsed)
-            err_msg = f"Rate limit active for '{name}'. Cooldown: {wait_rem}s remaining."
+            err_msg = f"Rate limit active for '{name}' [{host}/{service}]. Cooldown: {wait_rem}s remaining."
             record_audit(action_id, entity, name, reason, tier, params, None, revert_cmd, reversible, "BLOCKED_RATE_LIMIT", err_msg)
+
+            # Circuit breaker: Send alert ONCE for revenue-critical actions
+            circuit_key = (name, host, service)
+            if name in REVENUE_CRITICAL_ACTIONS and circuit_key not in _CIRCUIT_BREAKER_TRIGGERED:
+                _CIRCUIT_BREAKER_TRIGGERED.add(circuit_key)
+                if _NOTIFIER_HOOK:
+                    try:
+                        _NOTIFIER_HOOK("CIRCUIT_BREAKER", {
+                            "name": name,
+                            "host": host,
+                            "service": service,
+                            "wait_rem": wait_rem
+                        })
+                    except Exception as ex:
+                        logger.warning(f"Circuit breaker alert notification failed: {ex}")
+
             raise ActuatorRateLimitError(err_msg)
 
     # 3. L3 Approval Interception
@@ -278,6 +370,8 @@ def actuate(name: str,
             "tier": tier,
             "fn": fn,
             "params": params,
+            "host": host,
+            "service": service,
             "reason": reason,
             "revert": revert,
             "revert_cmd": revert_cmd,
@@ -320,6 +414,11 @@ def actuate(name: str,
             result = fn()
         record_audit(action_id, entity, name, reason, tier, params, result, revert_cmd, reversible, "EXECUTED")
 
+        # Update persistent rate limit timestamp upon success
+        if name in RATE_LIMITS:
+            record_persistent_rate_limit(name, host, service, time.time())
+            _CIRCUIT_BREAKER_TRIGGERED.discard((name, host, service))
+
         # Register revert handler if reversible
         if reversible and revert:
             REVERT_REGISTRY[action_id] = revert
@@ -352,7 +451,7 @@ def actuate(name: str,
 def execute_approved_action(action_id: str, user_id: int) -> Dict[str, Any]:
     """
     Executes an action that was previously queued for L3 approval.
-    Verifies user authorization, single-use, and expiration.
+    Verifies user authorization, single-use, 10m expiry, pause state, and re-checks rate limit.
     """
     if user_id != config.TELEGRAM_CHAT_ID:
         return {"success": False, "error": "Unauthorized: user ID does not match master chat ID."}
@@ -364,17 +463,37 @@ def execute_approved_action(action_id: str, user_id: int) -> Dict[str, Any]:
     if action_data.get("status") != "PENDING_APPROVAL":
         return {"success": False, "error": "Action has already been processed."}
 
+    # 1. Expiration Check (10 minutes)
     if time.time() > action_data["expires_at"]:
         action_data["status"] = "EXPIRED"
         record_audit(action_id, action_data["entity"], action_data["name"], action_data["reason"], "L3", action_data["params"], None, action_data.get("revert_cmd", ""), action_data["reversible"], "EXPIRED", "10m approval window expired")
         del PENDING_APPROVALS[action_id]
         return {"success": False, "error": "Approval request has expired (exceeded 10 minutes)."}
 
+    # 2. Re-check Kill Switch (fail-closed check between request and approval)
+    if is_system_paused():
+        record_audit(action_id, action_data["entity"], action_data["name"], action_data["reason"], "L3", action_data["params"], None, action_data.get("revert_cmd", ""), action_data["reversible"], "BLOCKED_PAUSED", "Kill switch activated while awaiting approval")
+        return {"success": False, "error": "System was paused after approval request. Execution blocked."}
+
+    name = action_data["name"]
+    host = action_data.get("host", "localhost")
+    service = action_data.get("service", "default")
+
+    # 3. Re-check Rate Limit at execution time
+    if name in RATE_LIMITS:
+        cooldown = RATE_LIMITS[name]
+        last_exec = get_persistent_rate_limit(name, host, service)
+        elapsed = time.time() - last_exec
+        if elapsed < cooldown:
+            wait_rem = int(cooldown - elapsed)
+            err_msg = f"Rate limit active for '{name}' [{host}/{service}]. Cooldown: {wait_rem}s remaining."
+            record_audit(action_id, action_data["entity"], name, action_data["reason"], "L3", action_data["params"], None, action_data.get("revert_cmd", ""), action_data["reversible"], "BLOCKED_RATE_LIMIT", err_msg)
+            return {"success": False, "error": err_msg}
+
     # Mark as consumed immediately to ensure single-use
     action_data["status"] = "PROCESSING"
     fn = action_data["fn"]
     params = action_data["params"]
-    name = action_data["name"]
     entity = action_data["entity"]
     reversible = action_data["reversible"]
     reason = action_data["reason"]
@@ -387,6 +506,12 @@ def execute_approved_action(action_id: str, user_id: int) -> Dict[str, Any]:
         except TypeError:
             result = fn()
         record_audit(action_id, entity, name, reason, "L3", params, result, revert_cmd, reversible, "EXECUTED")
+        
+        # Update persistent rate limit
+        if name in RATE_LIMITS:
+            record_persistent_rate_limit(name, host, service, time.time())
+            _CIRCUIT_BREAKER_TRIGGERED.discard((name, host, service))
+
         if reversible and revert:
             REVERT_REGISTRY[action_id] = revert
         del PENDING_APPROVALS[action_id]
@@ -418,8 +543,9 @@ def reject_approved_action(action_id: str, user_id: int) -> Dict[str, Any]:
 
 def undo_action(action_id: str) -> Dict[str, Any]:
     """Reverts a previously executed reversible action."""
+    db_file = get_db_path()
     try:
-        with sqlite3.connect(str(config.DB_PATH), timeout=3) as conn:
+        with sqlite3.connect(str(db_file), timeout=3) as conn:
             cur = conn.cursor()
             cur.execute("""
                 SELECT action_name, reversible, status, revert_cmd, params_before
@@ -484,10 +610,28 @@ def actuate_command(cmd_args: List[str],
 
 
 def actuate_cache_vacuum(cache_dirs: List[Path], force: bool = False, entity: str = "mac_sentinel") -> float:
-    """Executes cache purge through actuate gateway with L1 tier."""
+    """Executes cache purge through actuate gateway with L1 tier and strict directory whitelist."""
+    # Strict whitelist check
+    sanitized_dirs: List[Path] = []
+    for d in cache_dirs:
+        d_str = str(d)
+        if any(allowed in d_str for allowed in ALLOWED_CACHE_WHITELIST):
+            sanitized_dirs.append(d)
+        else:
+            logger.warning(f"Cache vacuum directory '{d}' rejected: not in strict whitelist.")
+
+    # Calculate initial size before purge
+    size_before_mb = 0.0
+    for c_dir in sanitized_dirs:
+        if c_dir.exists() and c_dir.is_dir():
+            try:
+                size_before_mb += sum(f.stat().st_size for f in c_dir.glob('**/*') if f.is_file()) / (1024 * 1024)
+            except Exception:
+                pass
+
     def _do_vacuum():
         total_freed = 0.0
-        for c_dir in cache_dirs:
+        for c_dir in sanitized_dirs:
             if c_dir.exists() and c_dir.is_dir():
                 try:
                     if c_dir in [Path("/tmp"), Path("/var/tmp")]:
@@ -514,10 +658,14 @@ def actuate_cache_vacuum(cache_dirs: List[Path], force: bool = False, entity: st
         name="mac_purge_cache",
         tier="L1",
         fn=_do_vacuum,
-        params={"force": force, "dir_count": len(cache_dirs)},
+        params={
+            "force": force,
+            "dir_count": len(sanitized_dirs),
+            "size_before_mb": round(size_before_mb, 2)
+        },
         entity=entity,
         reason=f"Silent cache vacuum (force={force})",
         reversible=False
     )
-    return float(res.get("result", 0.0))
-
+    freed = float(res.get("result", 0.0))
+    return freed

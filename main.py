@@ -132,6 +132,19 @@ def _actuator_telegram_notifier(tier: str, data: dict):
                 f"{undo_note}"
             )
             markup = None
+        elif tier == "CIRCUIT_BREAKER":
+            name = data.get("name")
+            host = data.get("host")
+            service = data.get("service")
+            wait_rem = data.get("wait_rem")
+            text = (
+                f"⚡ <b>[CIRCUIT BREAKER] RATE LIMIT AKTIF:</b>\n\n"
+                f"• <b>Aksi Revenue-Critical:</b> <code>{name}</code>\n"
+                f"• <b>Host / Service:</b> <code>{host} / {service}</code>\n"
+                f"• <b>Sisa Cooldown:</b> {wait_rem}s\n\n"
+                f"<i>Eksekusi ditahan sementara demi melindungi akun exchange / rate limit platform.</i>"
+            )
+            markup = None
         else:
             return
 
@@ -189,6 +202,31 @@ class ZuraOrchestrator:
             name="ZuraHeartbeatThread"
         )
         self.heartbeat_thread.start()
+
+    def record_boot_marker(self):
+        """Writes boot marker indicating complete initial ANS startup cycle."""
+        try:
+            head_sha = ""
+            try:
+                res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(BASE_DIR), capture_output=True, text=True, timeout=3)
+                if res.returncode == 0:
+                    head_sha = res.stdout.strip()
+            except Exception:
+                pass
+
+            marker = {
+                "sha": head_sha,
+                "pid": os.getpid(),
+                "ts": time.time(),
+                "ans_cycle_completed": True
+            }
+            marker_path = BASE_DIR / ".git" / "zura_boot_marker.json"
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text(json.dumps(marker))
+            set_state("boot_marker", json.dumps(marker))
+            logger.info(f"🏁 ANS startup cycle verified: Boot marker written (SHA={head_sha[:7]}, PID={os.getpid()})")
+        except Exception as e:
+            logger.warning(f"Failed to record boot marker: {e}")
 
     async def send_text(self, session: aiohttp.ClientSession, chat_id: int, text: str, reply_markup: dict = None):
         """Sends text message to Telegram with optional interactive inline buttons."""
@@ -619,6 +657,10 @@ class ZuraOrchestrator:
                     # 3. Server Multi-Node Health Audit (Every 180s)
                     if cycle_count % 3 == 0:
                         server_watchdog.probe_all_servers()
+
+                    # Charter v2 (0.5b): Record verified boot marker after first full ANS cycle completes
+                    if cycle_count == 1:
+                        self.record_boot_marker()
 
                     # 4. GitOps Update Check (L3 Guardrail: Notification with inline approval button only)
                     if cycle_count % 10 == 0:

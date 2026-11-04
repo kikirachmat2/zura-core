@@ -88,6 +88,13 @@ class AggressiveWifiSentinel:
         action = form_match.group(1) if form_match else ""
         submit_url = urljoin(base_url, action) if action else base_url
 
+        # Charter v2 (0.5b): Strict same-origin POST guard
+        submit_origin = urlparse(submit_url).netloc
+        base_origin = urlparse(base_url).netloc
+        if submit_origin != base_origin:
+            logger.warning(f"Cross-origin captive portal submission blocked: {submit_origin} != {base_origin}")
+            return False
+
         # Harvest input fields (including hidden tokens)
         inputs = re.findall(r'<input\s+[^>]*name=["\']([^"\']+)["\'](?:\s+[^>]*value=["\']([^"\']*)["\'])?', html, re.IGNORECASE)
         payload = {}

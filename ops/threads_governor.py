@@ -125,6 +125,21 @@ class ThreadsGovernor:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
+            # Charter v2 (0.5b): Daily replenish cap (max 5 stories/day)
+            try:
+                cursor.execute("SELECT COUNT(*) as cnt FROM stories WHERE DATE(created_at) = DATE('now')")
+                today_cnt = cursor.fetchone()["cnt"]
+                if today_cnt >= 5:
+                    conn.close()
+                    logger.info(f"Daily replenish cap reached ({today_cnt}/5 today).")
+                    return {"success": False, "reason": f"Daily cap reached ({today_cnt}/5 stories today)"}
+            except Exception:
+                cursor.execute("SELECT COUNT(*) as cnt FROM stories WHERE status = 'queued'")
+                q_cnt = cursor.fetchone()["cnt"]
+                if q_cnt >= 5:
+                    conn.close()
+                    return {"success": False, "reason": f"Queue cap reached ({q_cnt} stories queued)"}
+
             # 1. Pick a high-performing product from product_bank
             cursor.execute("SELECT * FROM product_bank WHERE active = 1 ORDER BY RANDOM() LIMIT 1")
             product = cursor.fetchone()

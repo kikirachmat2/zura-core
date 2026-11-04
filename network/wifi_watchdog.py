@@ -11,6 +11,7 @@ import subprocess
 import time
 import logging
 import sys
+import psutil
 from core.config import WIFI_MAX_LATENCY_MS
 from core.memory import log_decision, set_state
 from core.actuator import actuate, actuate_command, ActuatorError
@@ -91,10 +92,34 @@ class WifiWatchdog:
             logger.debug(f"DNS flush error: {e}")
             return False
 
+    def is_meeting_active(self) -> bool:
+        """
+        Detects if user is currently in a meeting or voice call on macOS.
+        Checks for running meeting apps (Zoom, Teams, Webex, FaceTime, Slack).
+        """
+        meeting_apps = ["zoom.us", "teams", "webex", "facetime", "slack"]
+        try:
+            for proc in psutil.process_iter(['name']):
+                p_name = (proc.info.get('name') or "").lower()
+                if any(m in p_name for m in meeting_apps):
+                    return True
+        except Exception:
+            pass
+        return False
+
     def reset_wifi_interface(self) -> bool:
-        """Re-associates Wi-Fi to force re-connection to 5GHz via actuator gateway (L2)."""
+        """
+        Re-associates Wi-Fi via actuator gateway.
+        Per Charter v2 (Fase 0.5b):
+        STRICT DEFAULT TIER IS L3 (requires explicit human approval before cycling Wi-Fi),
+        especially if a meeting is active or unverified.
+        """
         if not self.is_mac:
             return False
+
+        meeting_active = self.is_meeting_active()
+        # Per specification: L3 if meeting active or no reliable detector (default L3)
+        tier = "L3"
 
         def _do_cycle():
             subprocess.run(["networksetup", "-setairportpower", self.interface, "off"], capture_output=True, timeout=3)
@@ -109,11 +134,11 @@ class WifiWatchdog:
         try:
             res = actuate(
                 name="network_wifi_reconnect",
-                tier="L2",
+                tier=tier,
                 fn=_do_cycle,
-                params={"interface": self.interface},
+                params={"interface": self.interface, "meeting_active": meeting_active},
                 entity="wifi_watchdog",
-                reason="Wi-Fi Lag / Packet Loss Detected",
+                reason=f"Wi-Fi cycle requested (Meeting active: {meeting_active})",
                 revert=_revert_cycle,
                 reversible=True
             )

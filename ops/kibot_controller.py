@@ -9,6 +9,7 @@ Direct Controller for KiBot V3 (70/30 Indodax DCA Trading Bot):
 
 import os
 import sys
+import shutil
 import sqlite3
 import logging
 import subprocess
@@ -128,11 +129,24 @@ class KiBotController:
         is_locked_val = target_val in [750000.0, 1500000.0]
         tier = "L2" if is_locked_val else "L3"
 
-        backup_file = env_file.with_name(f"{env_file.name}.bak")
+        # Rotate up to 3 copies with chmod 600
+        bak1 = env_file.with_name(f"{env_file.name}.bak.1")
+        bak2 = env_file.with_name(f"{env_file.name}.bak.2")
+        bak3 = env_file.with_name(f"{env_file.name}.bak.3")
 
         def _do_tune():
-            # 1. Backup .env before write
-            backup_file.write_text(env_file.read_text())
+            # 1. Rotate backups (max 3 copies) and chmod 600
+            try:
+                if bak2.exists():
+                    shutil.copyfile(bak2, bak3)
+                    os.chmod(bak3, 0o600)
+                if bak1.exists():
+                    shutil.copyfile(bak1, bak2)
+                    os.chmod(bak2, 0o600)
+                shutil.copyfile(env_file, bak1)
+                os.chmod(bak1, 0o600)
+            except Exception as ex:
+                logger.warning(f"Error rotating KiBot .env backups: {ex}")
 
             # 2. Modify only MAX_SINGLE_TRADE_IDR
             lines = env_file.read_text().splitlines()
@@ -143,6 +157,7 @@ class KiBotController:
                 else:
                     new_lines.append(line)
             env_file.write_text("\n".join(new_lines) + "\n")
+            os.chmod(env_file, 0o600)
 
             # 3. Trigger service restart via actuator (rate limited to 1x/hr)
             restart_output = "Skipped (not on server)"
@@ -179,11 +194,12 @@ class KiBotController:
             }
 
         def _revert_tune():
-            if backup_file.exists():
-                env_file.write_text(backup_file.read_text())
+            if bak1.exists():
+                shutil.copyfile(bak1, env_file)
+                os.chmod(env_file, 0o600)
                 if sys.platform.startswith("linux"):
                     subprocess.run(["sudo", "/usr/bin/systemctl", "restart", "kibot-v3-core.service"], capture_output=True, text=True, timeout=10)
-                return "Restored KiBot .env from backup and restarted service"
+                return "Restored KiBot .env from bak.1 and restarted service"
             return "No backup file found to restore"
 
         try:

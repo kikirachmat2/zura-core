@@ -48,8 +48,9 @@ class TestGitOps01bIsolated(unittest.TestCase):
         (self.dev_dir / "core/config.py").write_text(f"from pathlib import Path\nBASE_DIR = Path('{self.dev_dir}')\nGITOPS_BRANCH = 'main'\nTELEGRAM_BOT_TOKEN = ''\nTELEGRAM_CHAT_ID = 0\nDB_PATH = BASE_DIR / 'zura.db'\n")
         (self.dev_dir / "core/memory.py").write_text("def log_decision(*args, **kwargs): pass\ndef set_state(*args, **kwargs): pass\ndef get_state(*args, **kwargs): return ''\n")
         
-        # Copy gitops_watcher.py from project
+        # Copy gitops_watcher.py and core/actuator.py from project
         shutil.copy(PROJECT_ROOT / "ans/gitops_watcher.py", self.dev_dir / "ans/gitops_watcher.py")
+        shutil.copy(PROJECT_ROOT / "core/actuator.py", self.dev_dir / "core/actuator.py")
 
         subprocess.run(["git", "add", "."], cwd=str(self.dev_dir), check=True)
         subprocess.run(["git", "commit", "-m", "initial commit"], cwd=str(self.dev_dir), check=True)

@@ -10,6 +10,7 @@ Empowers Zura with full operational autonomy and continuous self-upgrade protoco
 import os
 import sys
 import time
+import re
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -80,18 +81,24 @@ class ZuraEvolutionEngine:
         # Topic 1: Autonomous AI Agents & Tools
         ai_brief = web_agent.search_web_lite("open source AI agent tools python github", limit=2)
         if ai_brief:
+            raw_s = ai_brief[0].get("snippet", "")[:180]
+            clean_s = re.sub(r"</?untrusted_web[^>]*>", "[STRIPPED_TAG]", raw_s, flags=re.IGNORECASE)
+            wrapped_s = f"<untrusted_web>{clean_s}</untrusted_web>"
             radar_findings.append({
                 "category": "AI Agents & Tech",
-                "finding": ai_brief[0].get("snippet", "")[:180],
+                "finding": wrapped_s,
                 "source": ai_brief[0].get("url", "")
             })
 
         # Topic 2: Crypto & Indodax Market Sentiment
         market_brief = web_agent.search_web_lite("Bitcoin market sentiment DCA crypto Indonesia", limit=2)
         if market_brief:
+            raw_m = market_brief[0].get("snippet", "")[:180]
+            clean_m = re.sub(r"</?untrusted_web[^>]*>", "[STRIPPED_TAG]", raw_m, flags=re.IGNORECASE)
+            wrapped_m = f"<untrusted_web>{clean_m}</untrusted_web>"
             radar_findings.append({
                 "category": "Crypto Market Sentiment",
-                "finding": market_brief[0].get("snippet", "")[:180],
+                "finding": wrapped_m,
                 "source": market_brief[0].get("url", "")
             })
 

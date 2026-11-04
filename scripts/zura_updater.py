@@ -84,6 +84,34 @@ def verify_functional_telegram(token: str) -> bool:
     return False
 
 
+def verify_boot_marker(target_sha: str, restart_time: float, old_pid: int = 0) -> Tuple[bool, str]:
+    """
+    Verifies that the new process wrote a valid boot marker after completing a full ANS cycle.
+    Charter v2 (0.5b): Requires sha == target, ts > restart_time, pid != old_pid, ans_cycle_completed.
+    """
+    marker_file = BASE_DIR / ".git" / "zura_boot_marker.json"
+    if not marker_file.exists():
+        return False, "Boot marker file not written yet"
+    try:
+        data = json.loads(marker_file.read_text())
+        m_sha = data.get("sha", "").lower()
+        m_ts = float(data.get("ts", 0))
+        m_pid = int(data.get("pid", 0))
+        m_cycle = bool(data.get("ans_cycle_completed", False))
+
+        if not m_cycle:
+            return False, "First ANS cycle has not completed yet"
+        if m_ts <= restart_time:
+            return False, f"Boot marker timestamp stale ({m_ts} <= {restart_time})"
+        if target_sha and m_sha != target_sha.lower():
+            return False, f"Boot marker SHA mismatch (expected {target_sha}, got {m_sha})"
+        if old_pid and m_pid == old_pid:
+            return False, f"Boot marker PID unchanged ({m_pid})"
+        return True, "Boot marker fully verified"
+    except Exception as e:
+        return False, f"Error reading boot marker: {e}"
+
+
 def get_db_heartbeat(db_path: Path) -> float:
     """Reads latest heartbeat timestamp from system_state table in SQLite."""
     if not db_path.exists():
@@ -139,20 +167,25 @@ def main():
     is_linux = sys.platform.startswith("linux")
     restart_time = time.time()
 
+    # Pre-clean stale boot marker
+    (BASE_DIR / ".git" / "zura_boot_marker.json").unlink(missing_ok=True)
+
     if is_linux:
-        # 1. Record initial restart counter to detect crash-looping
+        # 1. Record initial restart counter and MainPID to detect crash-looping
         initial_restarts_str = get_systemd_property("zura.service", "NRestarts")
         initial_restarts = int(initial_restarts_str) if initial_restarts_str.isdigit() else 0
+        initial_pid_str = get_systemd_property("zura.service", "MainPID")
+        initial_pid = int(initial_pid_str) if initial_pid_str.isdigit() else 0
 
         systemctl_bin = "/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else "systemctl"
-        print(f"[ZuraUpdater] Restarting zura.service (initial restarts={initial_restarts})...")
+        print(f"[ZuraUpdater] Restarting zura.service (initial restarts={initial_restarts}, initial pid={initial_pid})...")
         restart_res = subprocess.run(["sudo", systemctl_bin, "restart", "zura.service"], capture_output=True, text=True, timeout=15)
         if restart_res.returncode != 0:
             err = restart_res.stderr.strip() or "systemctl restart failed"
             return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Restart command error: {err}")
 
-        # 2. Monitor heartbeat for up to 120 seconds
-        print("[ZuraUpdater] Verifying heartbeat and NRestarts for 120s...")
+        # 2. Monitor heartbeat and boot marker for up to 120 seconds
+        print("[ZuraUpdater] Verifying heartbeat, boot marker, and NRestarts for 120s...")
         heartbeat_verified = False
         for elapsed in range(1, 121):
             time.sleep(1)
@@ -169,18 +202,19 @@ def main():
             if state in ["failed", "dead"]:
                 return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Service entered {state} state ({substate})")
 
-            # Check DB heartbeat AND functional getMe test
+            # Check DB heartbeat, boot marker proof, AND functional getMe test
             hb = get_db_heartbeat(db_path)
-            if hb > restart_time:
+            marker_ok, marker_msg = verify_boot_marker(target_sha, restart_time, old_pid=initial_pid)
+            if hb > restart_time and marker_ok:
                 if verify_functional_telegram(bot_token):
                     heartbeat_verified = True
-                    print(f"[ZuraUpdater] Heartbeat and functional getMe verified after {elapsed}s (hb={hb} > restart_time={restart_time})")
+                    print(f"[ZuraUpdater] Heartbeat, boot marker ({marker_msg}), and getMe verified after {elapsed}s (hb={hb})")
                     break
                 else:
-                    print(f"[ZuraUpdater] Heartbeat recorded but functional getMe check pending ({elapsed}s)...")
+                    print(f"[ZuraUpdater] Boot marker verified but functional getMe check pending ({elapsed}s)...")
 
         if not heartbeat_verified:
-            return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Heartbeat timeout (no fresh DB heartbeat within 120s)")
+            return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Heartbeat timeout (boot marker/heartbeat verification timeout after 120s)")
 
     # Success cleanup
     MARKER_PATH.unlink(missing_ok=True)

@@ -91,12 +91,26 @@ class SystemSentinel:
         set_state("system_telemetry", data)
         return data
 
+    def get_foreground_app_name(self) -> str:
+        """Returns the name of the currently active frontmost application on macOS."""
+        if not self.is_mac:
+            return ""
+        try:
+            cmd = ["osascript", "-e", 'tell application "System Events" to get name of first application process whose frontmost is true']
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            if res.returncode == 0:
+                return res.stdout.strip().lower()
+        except Exception:
+            pass
+        return ""
+
     def tame_runaway_processes(self) -> list:
-        """Tames runaway or high-impact background processes using renice."""
+        """Tames runaway or high-impact background processes using renice (strictly avoids foreground apps)."""
         tamed = []
         whitelist = ["python3", "code", "node", "kernel_task", "Antigravity", "WindowServer", "pm2", "kibot"]
         background_hogs = ["mdworker", "mdworker_shared", "mediaanalysisd", "photoanalysisd", "VTDecoderXPCService"]
 
+        frontmost = self.get_foreground_app_name()
         load_1, _, _ = os.getloadavg()
         is_overloaded = load_1 > self.LOAD_AVG_MAX
 
@@ -105,6 +119,10 @@ class SystemSentinel:
                 cpu = proc.info['cpu_percent']
                 name = proc.info['name']
                 pid = proc.info['pid']
+
+                # Guard: STRICTLY NEVER renice the active foreground application
+                if frontmost and (frontmost in name.lower() or name.lower() in frontmost):
+                    continue
 
                 # Condition 1: Direct runaway process exceeding 65% CPU
                 if cpu and cpu > self.RUNAWAY_CPU_PCT and not any(w in name.lower() for w in whitelist):

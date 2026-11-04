@@ -28,6 +28,8 @@ import logging
 import py_compile
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
+
+from core.actuator import is_system_paused, record_audit
 from core.config import BASE_DIR, GITOPS_BRANCH, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DB_PATH
 from core.memory import log_decision
 
@@ -227,13 +229,28 @@ class GitOpsWatcher:
         Executes L3-authorized update strictly tied to the verified target_sha.
         Includes sanity validation, pip freeze backup/restore, systemd verification,
         and automated hard-rollback on failure.
+        Enforces Kill Switch check and audit logging per Charter v2 (Fase 0.5b).
         """
+        if is_system_paused():
+            return {
+                "success": False,
+                "stage": "kill_switch",
+                "error": "GitOps update blocked: System is in PAUSED / Kill-Switch state."
+            }
+
         # Anti double-tap lock
         if not self._lock.acquire(blocking=False):
             return {"success": False, "stage": "lock", "error": "An update operation is already in progress"}
 
+        action_id = str(time.time()).replace(".", "")[-8:]
+        record_audit(action_id, "gitops_watcher", "gitops_apply_update", f"Applying verified SHA {target_sha}", "L3", {"target_sha": target_sha}, None, "git reset --hard pre_pull_sha", True, "PENDING")
+
         try:
-            return self._apply_update_internal(target_sha)
+            res = self._apply_update_internal(target_sha)
+            status = "EXECUTED" if res.get("success") else "FAILED"
+            err = res.get("error", "")
+            record_audit(action_id, "gitops_watcher", "gitops_apply_update", f"Applied SHA {target_sha}", "L3", {"target_sha": target_sha}, res, "git reset --hard pre_pull_sha", True, status, err)
+            return res
         finally:
             self._lock.release()
 
