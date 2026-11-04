@@ -58,12 +58,6 @@ SERVER_RAM_MAX_PCT = float(os.getenv("SERVER_RAM_MAX_PCT", "85.0"))
 SERVER_DISK_MAX_PCT = float(os.getenv("SERVER_DISK_MAX_PCT", "75.0"))
 WIFI_MAX_LATENCY_MS = float(os.getenv("WIFI_MAX_LATENCY_MS", "90.0"))
 
-# Email & Cowork Gateway
-EMAIL_IMAP_SERVER = os.getenv("EMAIL_IMAP_SERVER", "imap.gmail.com")
-EMAIL_USER = os.getenv("EMAIL_USER", "")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "993"))
-
 # Personal Hotspot Failover
 PERSONAL_HOTSPOT_SSID = os.getenv("PERSONAL_HOTSPOT_SSID", "PersonalHotspot")
 PERSONAL_HOTSPOT_PASS = os.getenv("PERSONAL_HOTSPOT_PASS", "")

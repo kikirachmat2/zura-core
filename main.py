@@ -39,7 +39,6 @@ from ops.sheets_sync import sheets_sync
 from ops.web_agent import web_agent
 from ops.evolution_engine import evolution_engine
 from network.wifi_watchdog import wifi_watchdog
-from core.email_watchdog import email_watchdog
 
 # Setup logging
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -69,8 +68,7 @@ def get_executive_menu_markup() -> dict:
                 {"text": "📈 KiBot V3 DCA", "callback_data": "cb_kibot"}
             ],
             [
-                {"text": "📊 Unduh Spreadsheet", "callback_data": "cb_sheet"},
-                {"text": "💳 Audit Langganan", "callback_data": "cb_subs"}
+                {"text": "📊 Unduh Spreadsheet", "callback_data": "cb_sheet"}
             ],
             [
                 {"text": "📡 Status Fleet Server", "callback_data": "cb_status"},
@@ -199,18 +197,6 @@ class ZuraOrchestrator:
                 f"<i>💡 Keputusan Zura: Guardrail aman, alokasi 70% BTC / 30% ETH aktif berjalan otomatis tanpa emosi!</i>"
             )
             await self.send_text(session, chat_id, k_msg, reply_markup=get_executive_menu_markup())
-        elif data == "cb_subs":
-            subs = email_watchdog.audit_subscriptions(days=60)
-            if not subs:
-                await self.send_text(session, chat_id, "✨ Gak ada tagihan langganan mencurigakan dalam 60 hari terakhir, Bos!")
-            else:
-                sub_lines = "\n".join([f"• <b>{s['service']}</b>: {s['subject']} (~{s['cost_estimate']})" for s in subs[:8]])
-                report = (
-                    f"💳 <b>AUDIT LANGGANAN (SUBSCRIPTION VAMPIRE HUNTER):</b>\n\n"
-                    f"{sub_lines}\n\n"
-                    f"💡 <i>Zura sarankan cek layanan di atas. Stop auto-renewal yang gak ngasilin ROI!</i>"
-                )
-                await self.send_text(session, chat_id, report, reply_markup=get_executive_menu_markup())
         elif data == "cb_sheet":
             csv_path = sheets_sync.export_ledger_to_csv()
             summary = sheets_sync.generate_executive_spreadsheet_summary()
@@ -352,36 +338,6 @@ class ZuraOrchestrator:
             summary = sheets_sync.generate_executive_spreadsheet_summary()
             await self.send_document(session, chat_id, str(csv_path), caption="📊 Buku Kas & Cuan Bos Kiki (Format CSV Excel-Ready)")
             await self.send_text(session, chat_id, summary, reply_markup=get_executive_menu_markup())
-            return
-
-        if text.startswith("/reply"):
-            parts = text.split(maxsplit=1)
-            draft_id = parts[1].strip() if len(parts) > 1 else ""
-            pending = get_state("pending_email_drafts", {})
-            if draft_id in pending:
-                item = pending[draft_id]
-                res = email_watchdog.send_reply(item["to"], item["subject"], item["draft"])
-                if res.get("success"):
-                    await self.send_text(session, chat_id, f"✅ <b>Email Berhasil Terkirim!</b>\n\nKe: <code>{res['recipient']}</code>\nSubjek: <b>{item['subject']}</b>\n\n<i>Zura sudah tembak via Google SMTP resmi akun lu, Bos!</i>")
-                else:
-                    await self.send_text(session, chat_id, f"❌ <b>Gagal Kirim Email:</b> {res.get('error')}")
-            else:
-                await self.send_text(session, chat_id, "⚠️ Draf email tidak ditemukan atau ID salah.")
-            return
-
-        if text.lower() in ["/subs", "subs", "/langganan", "langganan"]:
-            await self.send_text(session, chat_id, "🔍 <i>Zura lagi scan email 60 hari ke belakang buat audit tagihan langganan lu...</i>")
-            subs = email_watchdog.audit_subscriptions(days=60)
-            if not subs:
-                await self.send_text(session, chat_id, "✨ Gak ada tagihan langganan mencurigakan dalam 60 hari terakhir, Bos!")
-            else:
-                sub_lines = "\n".join([f"• <b>{s['service']}</b>: {s['subject']} (~{s['cost_estimate']})" for s in subs[:8]])
-                report = (
-                    f"💳 <b>AUDIT LANGGANAN (SUBSCRIPTION VAMPIRE HUNTER):</b>\n\n"
-                    f"{sub_lines}\n\n"
-                    f"💡 <i>Zura sarankan cek layanan di atas. Stop auto-renewal yang gak ngasilin ROI!</i>"
-                )
-                await self.send_text(session, chat_id, report, reply_markup=get_executive_menu_markup())
             return
 
         if text.startswith("/browse"):
@@ -545,20 +501,14 @@ class ZuraOrchestrator:
                     if cycle_count % 30 == 0:
                         cleanup_temp_voice()
 
-                    # 6. Email Cowork Triage (Every 180s)
-                    if cycle_count % 3 == 0 and email_watchdog.is_configured():
-                        triaged = email_watchdog.fetch_and_triage_unread()
-                        for item in triaged:
-                            await email_watchdog.send_email_alert(session, self.authorized_chat_id, item)
-
-                    # 7. Production Systems Takeover & Auto-Replenish (Every 180s)
+                    # 6. Production Systems Takeover & Auto-Replenish (Every 180s)
                     if cycle_count % 3 == 0:
                         kibot_controller.get_kibot_metrics()
                         threads_actions = threads_governor.evaluate_and_govern()
                         if threads_actions:
                             logger.info(f"🧵 Threads Governor Actions: {threads_actions}")
 
-                    # 8. Full Autonomous Evolution & Production Governance (Every 600s / 10 mins)
+                    # 7. Full Autonomous Evolution & Production Governance (Every 600s / 10 mins)
                     if cycle_count % 10 == 0:
                         evolution_engine.audit_and_govern_production()
 
@@ -566,6 +516,19 @@ class ZuraOrchestrator:
                     logger.error(f"ANS loop exception: {e}")
 
                 await asyncio.sleep(60)
+
+    async def heartbeat_loop(self):
+        """
+        Lightweight heartbeat loop independent of heavy ANS tasks.
+        Updates SQLite system_state 'last_ans_heartbeat' every 5 seconds.
+        Used by zura_updater and fleet watchdog to verify process vitality.
+        """
+        while True:
+            try:
+                set_state("last_ans_heartbeat", str(time.time()))
+            except Exception as e:
+                logger.error(f"Heartbeat write error: {e}")
+            await asyncio.sleep(5)
 
     async def run(self):
         """Starts all concurrent background tasks."""
@@ -576,7 +539,8 @@ class ZuraOrchestrator:
 
         await asyncio.gather(
             self.telegram_polling_loop(),
-            self.autonomic_ans_loop()
+            self.autonomic_ans_loop(),
+            self.heartbeat_loop()
         )
 
 

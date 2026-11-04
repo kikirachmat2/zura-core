@@ -2,7 +2,7 @@
 ops/finance_tracker.py - Zura Money-Oriented Financial & Wealth Accelerator
 Tracks Bos Kiki's monthly cashflow, counts expenses, and delivers wealth-velocity blueprints:
 - Monitors Burn Rate vs Incomes (Shopee Affiliate, Freelance Dev, KiBot PnL)
-- Analyzes bank/e-wallet transaction alerts from email_watchdog
+- Tracks monthly ledger summaries and financial telemetry
 - Delivers the "Kaya Cepat" Strategic Blueprint tailored for a money-oriented Developer
 """
 
