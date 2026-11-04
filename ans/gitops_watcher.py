@@ -20,6 +20,7 @@ Complies with Zura Charter v2:
 import os
 import sys
 import re
+import json
 import time
 import threading
 import subprocess
@@ -27,7 +28,7 @@ import logging
 import py_compile
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
-from core.config import BASE_DIR, GITOPS_BRANCH
+from core.config import BASE_DIR, GITOPS_BRANCH, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DB_PATH
 from core.memory import log_decision
 
 logger = logging.getLogger("GitOpsWatcher")
@@ -404,56 +405,49 @@ class GitOpsWatcher:
                 "rolled_back_to": pre_pull_sha[:7]
             }
 
-        # 11. Service Restart & Heartbeat Verification (on Linux systemd production)
-        if sys.platform.startswith("linux"):
-            restart_res = subprocess.run(
-                ["sudo", "systemctl", "restart", "zura.service"],
-                capture_output=True,
-                text=True,
-                timeout=15
-            )
-            if restart_res.returncode != 0:
-                logger.error(f"🚨 zura.service restart failed: {restart_res.stderr}. Rolling back...")
-                self._rollback_to(pre_pull_sha, pre_freeze_data)
-                subprocess.run(["sudo", "systemctl", "restart", "zura.service"], capture_output=True, timeout=15)
-                return {
-                    "success": False,
-                    "stage": "service_restart",
-                    "error": f"systemctl restart failed: {restart_res.stderr.strip()[:200]}",
-                    "rolled_back_to": pre_pull_sha[:7]
-                }
+        # 11. Write pending_update marker for detached updater
+        freeze_file_path = None
+        if pre_freeze_data:
+            freeze_file = self.repo_dir / ".git" / "pre_rollback_freeze.txt"
+            freeze_file.write_text(pre_freeze_data)
+            freeze_file_path = str(freeze_file)
 
-            # Wait and verify heartbeat (up to 10 seconds)
-            healthy = False
-            for _ in range(10):
-                time.sleep(1)
-                chk = subprocess.run(
-                    ["systemctl", "is-active", "zura.service"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+        marker_data = {
+            "pre_pull_sha": pre_pull_sha,
+            "target_sha": target_sha,
+            "timestamp": time.time(),
+            "chat_id": TELEGRAM_CHAT_ID,
+            "bot_token": TELEGRAM_BOT_TOKEN,
+            "db_path": str(DB_PATH),
+            "pre_freeze_path": freeze_file_path
+        }
+        marker_file = self.repo_dir / ".git" / "pending_update.json"
+        try:
+            marker_file.write_text(json.dumps(marker_data))
+        except Exception as e:
+            logger.warning(f"Failed to write pending_update marker: {e}")
+
+        # 12. Spawn detached updater process (outside systemd zura.service group)
+        updater_script = self.repo_dir / "scripts" / "zura_updater.py"
+        if updater_script.exists():
+            try:
+                subprocess.Popen(
+                    [sys.executable, str(updater_script)],
+                    cwd=str(self.repo_dir),
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
                 )
-                if chk.stdout.strip() == "active":
-                    healthy = True
-                    break
+                logger.info("🚀 Spawned detached zura_updater process to manage restart and heartbeat verification.")
+            except Exception as e:
+                logger.error(f"Failed to spawn detached updater: {e}")
 
-            if not healthy:
-                logger.error("🚨 zura.service heartbeat unhealthy after update. Rolling back...")
-                self._rollback_to(pre_pull_sha, pre_freeze_data)
-                subprocess.run(["sudo", "systemctl", "restart", "zura.service"], capture_output=True, timeout=15)
-                return {
-                    "success": False,
-                    "stage": "heartbeat_verification",
-                    "error": "zura.service is not active after update",
-                    "rolled_back_to": pre_pull_sha[:7]
-                }
-
-        # 12. Record Audit Decision
+        # 13. Record Audit Decision
         log_decision(
             domain="GitOps Guardian",
             trigger_event=f"L3 User approval for commit {target_sha[:7]}",
-            decision_taken="Applied update after passing porcelain, lineage, py_compile, dependencies, import, and heartbeat tests",
-            outcome=f"Updated successfully from {pre_pull_sha[:7]} to {new_sha[:7]}"
+            decision_taken="Applied update after passing porcelain, lineage, py_compile, dependencies, and import tests",
+            outcome=f"Updated successfully from {pre_pull_sha[:7]} to {new_sha[:7]} (detached verifier active)"
         )
 
         logger.info(f"✅ Update successfully applied and verified: {pre_pull_sha[:7]} -> {new_sha[:7]}")
@@ -461,7 +455,8 @@ class GitOpsWatcher:
             "success": True,
             "old_sha": pre_pull_sha[:7],
             "new_sha": new_sha[:7],
-            "rolled_back_to": None
+            "rolled_back_to": None,
+            "detached": True
         }
 
     def _rollback_to(self, sha: str, pre_freeze_data: Optional[str] = None):

@@ -459,6 +459,10 @@ class ZuraOrchestrator:
             while self.is_running:
                 cycle_count += 1
                 try:
+                    # Record persistent DB heartbeat for external monitors / updaters
+                    import time as _t
+                    set_state("last_ans_heartbeat", str(_t.time()))
+
                     # 1. Mac Care (Every 60s)
                     mac_sentinel.run_autonomic_cycle()
 
