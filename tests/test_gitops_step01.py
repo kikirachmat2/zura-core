@@ -33,11 +33,12 @@ class TestGitOpsStep01(unittest.TestCase):
         self.assertTrue(valid, f"All Python files should compile cleanly: {msg}")
         print(f"  [PASS] validate_code_syntax: {msg}")
 
-    def test_apply_update_rejects_invalid_sha(self):
+    def test_apply_update_rejects_invalid_sha_format(self):
         res = self.watcher.apply_update("non_existent_sha_1234567")
         self.assertFalse(res["success"])
-        self.assertEqual(res["stage"], "validation" if len("non_existent_sha_1234567") < 7 else "git_fetch" if "fetch" in res["stage"] else res["stage"])
-        print(f"  [PASS] Invalid SHA rejected gracefully: {res}")
+        self.assertEqual(res["stage"], "validation")
+        self.assertIn("Invalid SHA format", res["error"])
+        print(f"  [PASS] Invalid SHA rejected explicitly at stage 'validation': {res['error']}")
 
     def test_deprecated_method_removed(self):
         self.assertFalse(hasattr(self.watcher, "check_and_apply_update"), "Deprecated method check_and_apply_update should be removed")

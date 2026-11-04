@@ -306,7 +306,17 @@ class GitOpsWatcher:
                 "error": f"Target SHA {target_sha[:7]} is not an ancestor of origin/{self.branch}"
             }
 
-        # 6. Backup pip freeze if requirements.txt will change
+        # 6. Preserve known-good safe_updater before merge
+        safe_updater_path = self.repo_dir / ".git" / "safe_updater.py"
+        updater_script = self.repo_dir / "scripts" / "zura_updater.py"
+        if updater_script.exists():
+            try:
+                import shutil
+                shutil.copy(updater_script, safe_updater_path)
+            except Exception as e:
+                logger.warning(f"Could not copy safe updater: {e}")
+
+        # 7. Backup pip freeze if requirements.txt will change
         pre_freeze_data: Optional[str] = None
         pip_path = self.repo_dir / "venv/bin/pip"
         try:
@@ -405,11 +415,12 @@ class GitOpsWatcher:
                 "rolled_back_to": pre_pull_sha[:7]
             }
 
-        # 11. Write pending_update marker for detached updater
+        # 12. Write pending_update marker (chmod 600, no token stored)
         freeze_file_path = None
         if pre_freeze_data:
             freeze_file = self.repo_dir / ".git" / "pre_rollback_freeze.txt"
             freeze_file.write_text(pre_freeze_data)
+            os.chmod(freeze_file, 0o600)
             freeze_file_path = str(freeze_file)
 
         marker_data = {
@@ -417,32 +428,45 @@ class GitOpsWatcher:
             "target_sha": target_sha,
             "timestamp": time.time(),
             "chat_id": TELEGRAM_CHAT_ID,
-            "bot_token": TELEGRAM_BOT_TOKEN,
             "db_path": str(DB_PATH),
             "pre_freeze_path": freeze_file_path
         }
         marker_file = self.repo_dir / ".git" / "pending_update.json"
         try:
             marker_file.write_text(json.dumps(marker_data))
+            os.chmod(marker_file, 0o600)
         except Exception as e:
             logger.warning(f"Failed to write pending_update marker: {e}")
 
-        # 12. Spawn detached updater process (outside systemd zura.service group)
-        updater_script = self.repo_dir / "scripts" / "zura_updater.py"
-        if updater_script.exists():
-            try:
-                subprocess.Popen(
-                    [sys.executable, str(updater_script)],
-                    cwd=str(self.repo_dir),
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                logger.info("🚀 Spawned detached zura_updater process to manage restart and heartbeat verification.")
-            except Exception as e:
-                logger.error(f"Failed to spawn detached updater: {e}")
+        # 13. Trigger decoupled updater via systemd unit or detached process
+        triggered_unit = False
+        if sys.platform.startswith("linux"):
+            unit_res = subprocess.run(
+                ["sudo", "systemctl", "start", "--no-block", "zura-updater.service"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if unit_res.returncode == 0:
+                triggered_unit = True
+                logger.info("🚀 Triggered zura-updater.service via systemd start --no-block.")
 
-        # 13. Record Audit Decision
+        if not triggered_unit:
+            runner_script = safe_updater_path if safe_updater_path.exists() else updater_script
+            if runner_script.exists():
+                try:
+                    subprocess.Popen(
+                        [sys.executable, str(runner_script)],
+                        cwd=str(self.repo_dir),
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    logger.info("🚀 Spawned detached safe_updater process.")
+                except Exception as e:
+                    logger.error(f"Failed to spawn detached updater: {e}")
+
+        # 14. Record Audit Decision
         log_decision(
             domain="GitOps Guardian",
             trigger_event=f"L3 User approval for commit {target_sha[:7]}",

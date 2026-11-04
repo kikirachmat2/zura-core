@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-scripts/zura_updater.py - Detached GitOps Post-Apply Watcher & Verifier
-Runs in an independent process/session OUTSIDE zura.service so it does NOT die
-when zura.service is restarted.
+scripts/zura_updater.py - Decoupled GitOps Service Restart & Heartbeat Verifier
+Runs independently under zura-updater.service (or out-of-tree safe copy)
+outside the zura.service cgroup so it survives zura.service restarts.
 
-Responsibilities:
-1. Reads pending update marker: .git/pending_update.json
-2. On Linux: Restarts zura.service via sudo systemctl restart zura.service
-3. Monitors live service health & persistent DB heartbeat for 30-45 seconds.
-4. Checks systemd NRestarts to detect flapping / crash-looping services.
-5. If heartbeat verified: cleans marker & sends success alert via Telegram.
-6. If heartbeat fails: executes emergency hard-rollback to pre-pull SHA,
-   restores pip dependencies if needed, restarts previous version of zura.service,
-   and dispatches critical Telegram alert.
+Workflow:
+1. Reads .git/pending_update.json (chmod 600, no secrets stored).
+2. Reads TELEGRAM_BOT_TOKEN securely from .env.
+3. Records initial NRestarts from systemd.
+4. Executes: sudo systemctl restart zura.service
+5. Verifies heartbeat for 45-60 seconds:
+   - Fails if NRestarts increases (service is crash-looping/flapping).
+   - Fails if ActiveState enters failed/dead.
+   - Succeeds only when SQLite 'last_ans_heartbeat' timestamp > restart_time.
+6. On success: removes pending_update.json and dispatches Telegram notification.
+7. On failure: performs hard-rollback (git reset --hard pre_pull_sha),
+   restores pip dependencies, restarts old version, cleans marker, and alerts Master.
 """
 
 import os
@@ -27,10 +30,26 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MARKER_PATH = BASE_DIR / ".git" / "pending_update.json"
+ENV_PATH = BASE_DIR / ".env"
+
+
+def load_bot_token_from_env() -> str:
+    """Reads TELEGRAM_BOT_TOKEN directly from .env without exposing in marker."""
+    if not ENV_PATH.exists():
+        return ""
+    try:
+        for line in ENV_PATH.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("TELEGRAM_BOT_TOKEN="):
+                val = line.split("=", 1)[1].strip()
+                return val.strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
 
 
 def send_telegram(token: str, chat_id: int, text: str):
-    """Sends Telegram message directly via HTTP without dependencies."""
+    """Sends Telegram message directly via HTTP without third-party libraries."""
     if not token or not chat_id:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -94,16 +113,16 @@ def main():
 
     pre_pull_sha = marker.get("pre_pull_sha", "")
     target_sha = marker.get("target_sha", "")
-    bot_token = marker.get("bot_token", "")
     chat_id = marker.get("chat_id", 0)
     db_path = Path(marker.get("db_path", str(BASE_DIR / "data" / "zura.db")))
     pre_freeze_path = marker.get("pre_freeze_path")
 
+    bot_token = load_bot_token_from_env()
     is_linux = sys.platform.startswith("linux")
     restart_time = time.time()
 
     if is_linux:
-        # 1. Record initial restart counter
+        # 1. Record initial restart counter to detect crash-looping
         initial_restarts_str = get_systemd_property("zura.service", "NRestarts")
         initial_restarts = int(initial_restarts_str) if initial_restarts_str.isdigit() else 0
 
@@ -113,36 +132,35 @@ def main():
             err = restart_res.stderr.strip() or "systemctl restart failed"
             return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Restart command error: {err}")
 
-        # 2. Monitor heartbeat for up to 45 seconds
-        print("[ZuraUpdater] Verifying heartbeat and NRestarts for 45s...")
+        # 2. Monitor heartbeat for up to 50 seconds
+        print("[ZuraUpdater] Verifying heartbeat and NRestarts for 50s...")
         heartbeat_verified = False
-        for elapsed in range(1, 46):
+        for elapsed in range(1, 51):
             time.sleep(1)
 
-            # Check service status
-            state = get_systemd_property("zura.service", "ActiveState")
-            substate = get_systemd_property("zura.service", "SubState")
+            # Flapping detection
             restarts_str = get_systemd_property("zura.service", "NRestarts")
             restarts = int(restarts_str) if restarts_str.isdigit() else 0
-
-            # Flapping detection: if service died and restarted again
             if restarts > initial_restarts:
                 return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Service is flapping (NRestarts increased)")
 
+            # Dead state detection
+            state = get_systemd_property("zura.service", "ActiveState")
+            substate = get_systemd_property("zura.service", "SubState")
             if state in ["failed", "dead"]:
-                return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Service entered {state} state (substate: {substate})")
+                return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Service entered {state} state ({substate})")
 
             # Check DB heartbeat
             hb = get_db_heartbeat(db_path)
-            if hb >= restart_time:
+            if hb > restart_time:
                 heartbeat_verified = True
-                print(f"[ZuraUpdater] Heartbeat verified after {elapsed}s (hb={hb})")
+                print(f"[ZuraUpdater] Heartbeat verified after {elapsed}s (hb={hb} > restart_time={restart_time})")
                 break
 
         if not heartbeat_verified:
-            return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Heartbeat timeout (no DB heartbeat received within 45s)")
+            return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Heartbeat timeout (no fresh DB heartbeat within 50s)")
 
-    # Success path
+    # Success cleanup
     MARKER_PATH.unlink(missing_ok=True)
     success_msg = (
         f"✅ <b>GITOPS DEPLOY SUKSES (VERIFIED):</b>\n\n"

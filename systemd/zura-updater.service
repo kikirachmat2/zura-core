@@ -1,0 +1,12 @@
+[Unit]
+Description=Zura GitOps Decoupled Updater & Heartbeat Verifier
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/zura-core
+ExecStart=/home/ubuntu/zura-core/venv/bin/python3 /home/ubuntu/zura-core/scripts/zura_updater.py
+TimeoutSec=120
+StandardOutput=journal
+StandardError=journal
