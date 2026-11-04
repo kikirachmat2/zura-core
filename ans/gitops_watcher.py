@@ -58,10 +58,10 @@ class GitOpsWatcher:
             logger.debug(f"rev-parse HEAD error: {e}")
             return ""
 
-    def get_remote_head_sha(self) -> str:
+    def get_remote_head_sha_info(self) -> Tuple[str, Optional[str]]:
         """
         Queries remote HEAD SHA with minimal bandwidth (~500 bytes).
-        Does NOT download git objects or trees.
+        Does NOT download git objects or trees. Returns (sha, error_message).
         """
         try:
             res = subprocess.run(
@@ -69,13 +69,21 @@ class GitOpsWatcher:
                 cwd=str(self.repo_dir),
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=15
             )
             if res.returncode == 0 and res.stdout:
-                return res.stdout.split()[0].strip()
+                return res.stdout.split()[0].strip(), None
+            err_msg = res.stderr.strip() or f"ls-remote exited with code {res.returncode}"
+            logger.error(f"ls-remote check error: {err_msg}")
+            return "", err_msg
         except Exception as e:
-            logger.debug(f"ls-remote check error: {e}")
-        return ""
+            logger.error(f"ls-remote exception: {e}")
+            return "", str(e)
+
+    def get_remote_head_sha(self) -> str:
+        """Convenience method returning SHA or empty string on error."""
+        sha, _ = self.get_remote_head_sha_info()
+        return sha
 
     def check_for_updates(self) -> Dict[str, Any]:
         """
@@ -83,7 +91,15 @@ class GitOpsWatcher:
         NEVER pulls code autonomously. Returns rich metadata and security warnings.
         """
         local_sha = self.get_local_head_sha()
-        remote_sha = self.get_remote_head_sha()
+        remote_sha, remote_err = self.get_remote_head_sha_info()
+
+        if remote_err:
+            return {
+                "update_available": False,
+                "error": remote_err,
+                "failed": True,
+                "reason": f"Remote query failed: {remote_err}"
+            }
 
         if not remote_sha or not local_sha:
             return {"update_available": False, "reason": "SHA check failed"}

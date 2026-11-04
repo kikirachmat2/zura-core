@@ -5,9 +5,14 @@ env/
 
 # Environment Variables & Secrets
 .env
+.env.*
+!.env.example
 *.pem
 *.key
+id_rsa*
+id_ed25519*
 *.id_rsa
+*.id_ed25519
 
 # Python Cache
 __pycache__/
@@ -16,12 +21,11 @@ __pycache__/
 .pytest_cache/
 
 # Databases & Backups
+data/
 *.db
 *.db-journal
 *.db-wal
 *.sqlite
-data/*.db
-data/backups/
 
 # Logs & Runtime
 *.log

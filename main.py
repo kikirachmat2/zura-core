@@ -472,7 +472,19 @@ class ZuraOrchestrator:
                     # 4. GitOps Update Check (L3 Guardrail: Notification with inline approval button only)
                     if cycle_count % 10 == 0:
                         check = gitops_watcher.check_for_updates()
-                        if check.get("update_available"):
+                        if check.get("failed"):
+                            err_msg = check.get("error", "Unknown git error")
+                            last_err = get_state("last_gitops_error", "")
+                            if last_err != err_msg:
+                                set_state("last_gitops_error", err_msg)
+                                fail_alert = (
+                                    f"🚨 <b>PERINGATAN GITOPS GUARDIAN:</b>\n\n"
+                                    f"Gagal memeriksa remote repository GitHub!\n"
+                                    f"<b>Error:</b> <code>{err_msg}</code>\n\n"
+                                    f"<i>Penyebab umum: Kredensial SSH / Deploy Key di server belum terpasang atau izin akses ditolak (terutama setelah repo diubah ke Private).</i>"
+                                )
+                                await self.send_text(session, self.authorized_chat_id, fail_alert)
+                        elif check.get("update_available"):
                             full_sha = check["full_remote_sha"]
                             last_notified = get_state("last_notified_gitops_sha", "")
                             if last_notified != full_sha:
@@ -483,7 +495,11 @@ class ZuraOrchestrator:
 
                                 stat_section = ""
                                 if check.get("diff_stat"):
-                                    stat_section = f"\n\n<b>Ringkasan Diff:</b>\n<code>{check['diff_stat'][:300]}</code>"
+                                    raw_stat = check['diff_stat']
+                                    if len(raw_stat) > 400:
+                                        stat_section = f"\n\n<b>Ringkasan Diff:</b>\n<code>{raw_stat[:380]}...\n...dan file lainnya</code>"
+                                    else:
+                                        stat_section = f"\n\n<b>Ringkasan Diff:</b>\n<code>{raw_stat}</code>"
 
                                 up_msg = (
                                     f"🚨 <b>PEMBARUAN KODE TERSEDIA DI GITHUB:</b>\n\n"
@@ -496,6 +512,10 @@ class ZuraOrchestrator:
                                     f"{warn_section}\n\n"
                                     f"<i>🛡️ Guardrail L3: Auto-pull nonaktif. Klik tombol di bawah untuk verifikasi sintaks & terapkan:</i>"
                                 )
+                                # Ensure Telegram character limit is strictly respected (< 4096)
+                                if len(up_msg) > 4000:
+                                    up_msg = up_msg[:3950] + "\n...[dipotong karena batas pesan Telegram]"
+
                                 markup = {
                                     "inline_keyboard": [[
                                         {"text": f"⚡ Terapkan ({check['remote_sha']})", "callback_data": f"gitops_apply:{full_sha}"},

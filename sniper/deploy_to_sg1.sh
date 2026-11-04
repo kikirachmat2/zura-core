@@ -1,19 +1,38 @@
 #!/bin/bash
-# sniper/deploy_to_sg1.sh - Deploy Batam Sniper to Server 1 (OCI Singapore) 24/7
+# sniper/deploy_to_sg1.sh - Deploy Batam Sniper to Server 1
 set -e
 
-SERVER_IP="${SERVER1_HOST:-your_server_ip}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Load .env if present
+if [ -f "$BASE_DIR/.env" ]; then
+  set -a
+  source "$BASE_DIR/.env"
+  set +a
+fi
+
+SERVER_IP="${SERVER1_HOST:-}"
 SERVER_USER="${SERVER1_USER:-ubuntu}"
 SSH_KEY="${SERVER1_KEY:-$HOME/.ssh/id_rsa}"
 REMOTE_DIR="/home/ubuntu/zura-sniper"
+
+if [ -z "$SERVER_IP" ]; then
+  echo "❌ Error: SERVER1_HOST is not set in environment or .env"
+  exit 1
+fi
 
 echo "🚀 [1/3] Syncing Batam Sniper & OCI credentials to Server 1 ($SERVER_IP)..."
 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" "mkdir -p $REMOTE_DIR ~/.oci"
 
 # Copy OCI credentials and sniper script
-scp -i "$SSH_KEY" -o StrictHostKeyChecking=no /Users/kiki/.oci/batam.pem "$SERVER_USER@$SERVER_IP:~/.oci/"
-scp -i "$SSH_KEY" -o StrictHostKeyChecking=no /Users/kiki/.oci/config "$SERVER_USER@$SERVER_IP:~/.oci/"
-scp -i "$SSH_KEY" -o StrictHostKeyChecking=no /Users/kiki/Documents/Web\ Develop/Personal\ AI/sniper/batam_sniper.py "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
+if [ -f "$HOME/.oci/batam.pem" ]; then
+  scp -i "$SSH_KEY" -o StrictHostKeyChecking=no "$HOME/.oci/batam.pem" "$SERVER_USER@$SERVER_IP:~/.oci/"
+fi
+if [ -f "$HOME/.oci/config" ]; then
+  scp -i "$SSH_KEY" -o StrictHostKeyChecking=no "$HOME/.oci/config" "$SERVER_USER@$SERVER_IP:~/.oci/"
+fi
+scp -i "$SSH_KEY" -o StrictHostKeyChecking=no "$BASE_DIR/sniper/batam_sniper.py" "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
 
 echo "📦 [2/3] Setting up Python virtual environment & dependencies on Server 1..."
 ssh -i "$SSH_KEY" "$SERVER_USER@$SERVER_IP" "bash -s" << 'REMOTE_SETUP'
@@ -47,5 +66,3 @@ SERVICE
   sudo systemctl enable --now zura-batam-sniper.service
   sudo systemctl status zura-batam-sniper.service --no-pager
 REMOTE_SYSTEMD
-
-echo "✅ Batam Sniper is now hunting 24/7 on Server 1!"
