@@ -60,10 +60,9 @@ class ZuraEvolutionEngine:
         else:
             actions_taken.append("KiBot Warning: Database connection check pending")
 
-        # 3. Cashflow Burn Rate Velocity Check
+        # 3. Personal Finance (Decommissioned per Charter v2)
         fin_snap = finance_tracker.get_full_financial_snapshot()
-        burn_rate = fin_snap.get("expense_tracked_idr", 0.0)
-        actions_taken.append(f"Financial Watch: Monthly burn rate tracked at Rp {burn_rate:,.0f}")
+        actions_taken.append(f"Financial Watch: Personal finance tracking decommissioned ({fin_snap.get('expense_tracked_idr', 'tidak diketahui')})")
 
         set_state("last_governance_cycle", time.time())
         return {

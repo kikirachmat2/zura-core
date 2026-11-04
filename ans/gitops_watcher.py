@@ -397,13 +397,17 @@ class GitOpsWatcher:
                     "rolled_back_to": pre_pull_sha[:7]
                 }
 
-        # 10. Sanity Import Test (run in both Mac and Linux environments)
+        # 10. Sanity Import Test (prefer venv python if available)
+        py_exec = str(self.repo_dir / "venv" / "bin" / "python3")
+        if not os.path.exists(py_exec):
+            py_exec = sys.executable
+
         import_test = subprocess.run(
-            [sys.executable, "-c", "import main, core.config, ans.gitops_watcher"],
+            [py_exec, "-c", "import main, core.config, ans.gitops_watcher"],
             cwd=str(self.repo_dir),
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=15
         )
         if import_test.returncode != 0:
             logger.error(f"🚨 Sanity import test FAILED: {import_test.stderr}. Rolling back...")

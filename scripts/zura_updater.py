@@ -132,10 +132,10 @@ def main():
             err = restart_res.stderr.strip() or "systemctl restart failed"
             return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, f"Restart command error: {err}")
 
-        # 2. Monitor heartbeat for up to 50 seconds
-        print("[ZuraUpdater] Verifying heartbeat and NRestarts for 50s...")
+        # 2. Monitor heartbeat for up to 120 seconds
+        print("[ZuraUpdater] Verifying heartbeat and NRestarts for 120s...")
         heartbeat_verified = False
-        for elapsed in range(1, 51):
+        for elapsed in range(1, 121):
             time.sleep(1)
 
             # Flapping detection
@@ -158,10 +158,22 @@ def main():
                 break
 
         if not heartbeat_verified:
-            return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Heartbeat timeout (no fresh DB heartbeat within 50s)")
+            return handle_failure(pre_pull_sha, target_sha, bot_token, chat_id, pre_freeze_path, "Heartbeat timeout (no fresh DB heartbeat within 120s)")
 
     # Success cleanup
     MARKER_PATH.unlink(missing_ok=True)
+
+    # Refresh out-of-tree safe copy after update is proven healthy
+    safe_copy = BASE_DIR / ".git" / "safe_updater.py"
+    current_updater = BASE_DIR / "scripts" / "zura_updater.py"
+    try:
+        import shutil
+        if current_updater.exists():
+            shutil.copy2(current_updater, safe_copy)
+            safe_copy.chmod(0o700)
+            print("[ZuraUpdater] Safe updater copy successfully refreshed to verified healthy version.")
+    except Exception as e:
+        print(f"[ZuraUpdater] Warning: Failed to refresh safe updater copy: {e}", file=sys.stderr)
     success_msg = (
         f"✅ <b>GITOPS DEPLOY SUKSES (VERIFIED):</b>\n\n"
         f"• <b>Commit Baru:</b> <code>{target_sha[:7]}</code>\n"

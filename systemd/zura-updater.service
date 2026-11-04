@@ -4,9 +4,11 @@ After=network.target
 
 [Service]
 Type=oneshot
-User=ubuntu
-WorkingDirectory=/home/ubuntu/zura-core
-ExecStart=/home/ubuntu/zura-core/venv/bin/python3 /home/ubuntu/zura-core/scripts/zura_updater.py
-TimeoutSec=120
+User=zura-ops
+WorkingDirectory=/home/zura-ops/zura-core
+ExecStart=/home/zura-ops/zura-core/venv/bin/python3 /home/zura-ops/zura-core/scripts/zura_updater.py
+TimeoutStartSec=180
+TimeoutSec=180
 StandardOutput=journal
 StandardError=journal
+

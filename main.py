@@ -13,6 +13,7 @@ import sys
 import time
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
 import aiohttp
@@ -55,23 +56,33 @@ logger = logging.getLogger("ZuraCore")
 TG_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
+def _heartbeat_thread_worker(running_flag: list):
+    """
+    Dedicated OS background thread for heartbeats.
+    Survives any asyncio event loop blocks, updating SQLite 'last_ans_heartbeat' every 5s.
+    """
+    logger.info("💓 Dedicated OS Heartbeat Thread Online (interval: 5s)...")
+    while running_flag[0]:
+        try:
+            set_state("last_ans_heartbeat", str(time.time()))
+        except Exception as e:
+            logger.error(f"Heartbeat thread write error: {e}")
+        time.sleep(5)
+
+
 def get_executive_menu_markup() -> dict:
     """Returns Hark-style interactive 1-tap action buttons for Telegram."""
     return {
         "inline_keyboard": [
             [
                 {"text": "👑 Otonomi & Evolusi", "callback_data": "cb_evolve"},
-                {"text": "💰 Cuan & Cashflow", "callback_data": "cb_cuan"}
+                {"text": "🧵 Threads Status", "callback_data": "cb_threads"}
             ],
             [
-                {"text": "🧵 Threads Status", "callback_data": "cb_threads"},
-                {"text": "📈 KiBot V3 DCA", "callback_data": "cb_kibot"}
+                {"text": "📈 KiBot V3 DCA", "callback_data": "cb_kibot"},
+                {"text": "📡 Status Fleet Server", "callback_data": "cb_status"}
             ],
             [
-                {"text": "📊 Unduh Spreadsheet", "callback_data": "cb_sheet"}
-            ],
-            [
-                {"text": "📡 Status Fleet Server", "callback_data": "cb_status"},
                 {"text": "🧹 Bersihkan Mac", "callback_data": "cb_clean"}
             ]
         ]
@@ -85,6 +96,15 @@ class ZuraOrchestrator:
         self.last_update_id = 0
         self.is_running = True
         self.last_briefing_hour = -1
+        self.running_flag = [True]
+        # Start dedicated OS heartbeat thread
+        self.heartbeat_thread = threading.Thread(
+            target=_heartbeat_thread_worker,
+            args=(self.running_flag,),
+            daemon=True,
+            name="ZuraHeartbeatThread"
+        )
+        self.heartbeat_thread.start()
 
     async def send_text(self, session: aiohttp.ClientSession, chat_id: int, text: str, reply_markup: dict = None):
         """Sends text message to Telegram with optional interactive inline buttons."""
@@ -198,9 +218,12 @@ class ZuraOrchestrator:
             )
             await self.send_text(session, chat_id, k_msg, reply_markup=get_executive_menu_markup())
         elif data == "cb_sheet":
-            csv_path = sheets_sync.export_ledger_to_csv()
-            summary = sheets_sync.generate_executive_spreadsheet_summary()
-            await self.send_document(session, chat_id, str(csv_path), caption="📊 Buku Kas & Cuan Bos Kiki (Format CSV Excel-Ready)")
+            summary = (
+                "📊 <b>BUKU KAS & SPREADSHEET:</b>\n\n"
+                "⚠️ <i>Fitur sinkronisasi spreadsheet dan buku kas telah dinonaktifkan (di luar scope Zura Charter v2).</i>\n\n"
+                "• Status Ledger: <code>tidak diketahui</code>\n"
+                "• Saldo Kas: <code>tidak diketahui</code>"
+            )
             await self.send_text(session, chat_id, summary, reply_markup=get_executive_menu_markup())
         elif data == "cb_replenish":
             await self.send_text(session, chat_id, "⚙️ <i>Zura lagi riset produk Shopee komisi tertinggi & merangkai cerita viral...</i>")
@@ -334,9 +357,12 @@ class ZuraOrchestrator:
             return
 
         if text.lower() in ["/sheet", "sheet", "/rekap", "rekap", "/excel", "excel"]:
-            csv_path = sheets_sync.export_ledger_to_csv()
-            summary = sheets_sync.generate_executive_spreadsheet_summary()
-            await self.send_document(session, chat_id, str(csv_path), caption="📊 Buku Kas & Cuan Bos Kiki (Format CSV Excel-Ready)")
+            summary = (
+                "📊 <b>BUKU KAS & SPREADSHEET:</b>\n\n"
+                "⚠️ <i>Fitur sinkronisasi spreadsheet dan buku kas telah dinonaktifkan (di luar scope Zura Charter v2).</i>\n\n"
+                "• Status Ledger: <code>tidak diketahui</code>\n"
+                "• Saldo Kas: <code>tidak diketahui</code>"
+            )
             await self.send_text(session, chat_id, summary, reply_markup=get_executive_menu_markup())
             return
 

@@ -193,12 +193,12 @@ class ServerWatchdog:
 
         # 2. Disk Vacuum if threshold breached
         if data.get("disk_used_pct", 0) > SERVER_DISK_MAX_PCT:
-            vacuum_cmd = "sudo journalctl --vacuum-size=150M && sudo apt-get clean"
+            vacuum_cmd = "sudo journalctl --vacuum-size=150M"
             self._execute_command(node, vacuum_cmd, timeout=15)
             log_decision(
                 domain=f"Server Sentinel ({node['id']})",
                 trigger_event=f"Disk usage breached {data['disk_used_pct']}% threshold",
-                decision_taken="Executed journalctl vacuum & apt clean",
+                decision_taken="Executed journalctl vacuum",
                 outcome="Storage capacity stabilized"
             )
 
