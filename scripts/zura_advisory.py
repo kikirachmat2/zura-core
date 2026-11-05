@@ -100,20 +100,23 @@ DATA DRAFT KONTEN:
 - Isi Slides:
 {slides_text}
 
-STANDAR LOLOS KURASI ZURA (DOUBLE-CHECKING HUMAN PERSONA):
-1. Logika & Kewarasan Konteks & Matematika:
-   - Jika ada rincian alokasi gaji / budget, TOTAL PENGELUARAN + TABUNGAN WAJIB 100% SAMA DENGAN GAJI YANG DIKLAIM.
-   - Transportasi wajib sesuai kota (KRL/MRT/LRT hanya di Jabodetabek & Yogya-Solo).
-2. Anti-AI Smell & Variasi Ritme:
-   - DILARANG membuat slide simetris dengan panjang kata yang sama.
+STANDAR LOLOS KURASI ZURA (HARDENED EDITORIAL RULES V2.0):
+1. Logika, Kewarasan Konteks & Matematika:
+   - Jika ada rincian alokasi gaji / budget, TOTAL PENGELUARAN + TABUNGAN WAJIB 100% SAMA DENGAN GAJI YANG DIKLAIM (Zero Math Hallucination).
+   - Transportasi wajib sesuai kota (KRL/MRT/LRT HANYA ADA di Jabodetabek & Yogya-Solo). Surabaya, Bandung, Bali, dll WAJIB motor/ojol/angkot.
+2. Persona Anchoring Kiki (@kikipunyacerita):
+   - Kiki adalah pemuda 26 tahun pekerja media di Jakarta Pusat, anak kosan perantau.
+   - JIKA TOPIK BERLOKASI DI LUAR JAKARTA (Surabaya, Bandung, Bali, dll), Kiki WAJIB berposisi sebagai KURATOR / PENGAMAT / TEMAN BERCERITA ("dapet cerita dari temen di Surabaya...", "obrolan anak kos Bandung..."). DILARANG KERAS mengaku tinggal, sewa kontrakan, atau cicil KPR di luar Jakarta!
+3. Anti-AI Smell & Variasi Asimetris:
+   - DILARANG membuat slide simetris dengan panjang kata yang sama persis (kelihatan bot!).
    - Gunakan variasi ritme manusia: celetukan 2-3 kata ("anjir cape.", "asli pusing."), diikuti cerita santai mengalir, serba huruf kecil (lowercase).
    - DILARANG frasa AI sok asik ("kalian tim mana nih?", "menarik untuk dibahas").
-3. Anti-Repetisi:
-   - Wajib berbeda topik dan sudut pandang dari postingan terakhir.
-4. Penempatan Affiliate (jika ada):
-   - Produk wajib jadi problem solver alami, bukan iklan tiba-tiba. ZERO kata iklan canggung ('btw kemarin checkout', 'selingan dikit').
+4. Zero-Link Penalty & Affiliate Problem-Solver:
+   - Jangan rusak feed utama dengan link jualan. Jika ada produk Shopee, produk WAJIB jadi problem solver murni dari masalah utama tanpa frasa kaku ('selingan dikit', 'kemarin gue checkout').
 5. Ending Dilema Polarisasi Ekstrem:
    - Slide terakhir memicu perdebatan dua kubu yang memaksa netizen speak up di kolom komentar tanpa ujaran kebencian.
+6. Multi-Pillar Exploration:
+   - Eksplorasi topik di luar sekadar angka gaji: kultur digital (fomo iphone, subscription trap, split bill), adulting taboo (warisan keluarga, pinjam tabungan nikah), etika karier (nepotisme, quiet firing), dan realitas perantauan daerah.
 
 OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
 {{
