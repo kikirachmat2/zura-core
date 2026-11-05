@@ -155,3 +155,4 @@ class CapitalFlywheel:
 
 # Global instance
 capital_flywheel = CapitalFlywheel()
+

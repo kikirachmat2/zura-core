@@ -64,6 +64,7 @@ enforce_file_permissions(strict=False)
 # Telegram Bot
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0"))
+TELEGRAM_GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_CHAT_ID", "-5329037538"))
 ZURA_BOT_USERNAME = os.getenv("ZURA_BOT_USERNAME", "zura_pa_bot")
 
 # AI Engines

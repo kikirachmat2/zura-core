@@ -24,7 +24,8 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
 from core.config import (
-    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TEMP_VOICE_DIR, LOGS_DIR
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_GROUP_CHAT_ID,
+    ZURA_BOT_USERNAME, TEMP_VOICE_DIR, LOGS_DIR
 )
 from core.brain import brain
 from core.memory import save_message, get_state, set_state
@@ -93,7 +94,7 @@ def _actuator_telegram_notifier(tier: str, data: dict):
     try:
         import urllib.request
         import json
-        chat_id = TELEGRAM_CHAT_ID
+        chat_id = TELEGRAM_GROUP_CHAT_ID or TELEGRAM_CHAT_ID
         if tier == "L3":
             action_id = data["action_id"]
             name = data["name"]
@@ -189,6 +190,7 @@ class ZuraOrchestrator:
     def __init__(self):
         self.bot_token = TELEGRAM_BOT_TOKEN
         self.authorized_chat_id = TELEGRAM_CHAT_ID
+        self.group_chat_id = TELEGRAM_GROUP_CHAT_ID
         self.last_update_id = 0
         self.is_running = True
         self.last_briefing_hour = -1
@@ -420,10 +422,29 @@ class ZuraOrchestrator:
     async def handle_user_message(self, session: aiohttp.ClientSession, message: dict):
         """Dispatches incoming text or voice message."""
         chat_id = message["chat"]["id"]
-        
-        # Security Guard: Only answer to Kiki
-        if chat_id != self.authorized_chat_id:
-            logger.warning(f"Unauthorized contact from chat_id {chat_id}. Ignored.")
+        from_user = message.get("from", {})
+        from_id = from_user.get("id")
+
+        # Security Guard: Only answer to Kiki (private DM or within authorized Executive War Room group)
+        is_direct_kiki = (chat_id == self.authorized_chat_id)
+        is_kiki_in_group = (chat_id == self.group_chat_id) and (from_id == self.authorized_chat_id)
+
+        if not (is_direct_kiki or is_kiki_in_group):
+            # Check if Zura was just added or invited to the group
+            new_members = message.get("new_chat_members", [])
+            for m in new_members:
+                if m.get("is_bot") and "zura" in m.get("username", "").lower():
+                    logger.info(f"🎉 Zura added to Group Chat ID: {chat_id} by {from_id}!")
+                    self.group_chat_id = chat_id
+                    welcome_msg = (
+                        "👑 <b>ZURA EXECUTIVE WAR ROOM ONLINE:</b>\n\n"
+                        "Halo Bos Kiki! Ruang Komando Eksekutif Telegram aktif.\n"
+                        f"• <b>Group ID:</b> <code>{chat_id}</code>\n"
+                        "• <b>Status:</b> Siaga memantau Kisah Komisi, performa Threads, dan kesehatan server SG1 24/7."
+                    )
+                    await self.send_text(session, chat_id, welcome_msg, reply_markup=get_executive_menu_markup())
+                    return
+            logger.warning(f"Unauthorized contact from chat_id {chat_id} (from {from_id}). Ignored.")
             return
 
         # Check for Voice Note
@@ -446,7 +467,11 @@ class ZuraOrchestrator:
                 await self.send_text(session, chat_id, "Suara lu agak kurang jelas nih Bos. Bisa diulang?")
                 return
 
-        logger.info(f"📩 Input from Kiki: '{text}'")
+        # Clean bot mention from command in group (/status@zura_pa_bot -> /status)
+        if ZURA_BOT_USERNAME and f"@{ZURA_BOT_USERNAME}" in text:
+            text = text.replace(f"@{ZURA_BOT_USERNAME}", "").strip()
+
+        logger.info(f"📩 Input from Kiki (chat {chat_id}): '{text}'")
 
         # Command Dispatcher
         if text.strip().lower() in ["/pause", "pause"]:
@@ -716,7 +741,7 @@ class ZuraOrchestrator:
                                         {"text": "❌ Abaikan", "callback_data": f"gitops_ignore:{check['remote_sha']}"}
                                     ]]
                                 }
-                                await self.send_text(session, self.authorized_chat_id, up_msg, reply_markup=markup)
+                                await self.send_text(session, self.group_chat_id or self.authorized_chat_id, up_msg, reply_markup=markup)
 
                     # 4. Scheduled Executive Briefing (08:00 & 20:00 WIB regardless of server timezone)
                     from datetime import timezone, timedelta
@@ -728,7 +753,8 @@ class ZuraOrchestrator:
                         label = "Pagi (08:00 WIB)" if current_hour == 8 else "Malam (20:00 WIB)"
                         digest = await asyncio.to_thread(decision_engine.generate_executive_digest, label)
                         voice_file = await synthesize_voice_async(digest[:500])
-                        await self.send_voice(session, self.authorized_chat_id, voice_file, caption=digest[:1024])
+                        target_chat = self.group_chat_id or self.authorized_chat_id
+                        await self.send_voice(session, target_chat, voice_file, caption=digest[:1024])
                         self.last_briefing_hour = current_hour
 
                     # 5. Periodic voice cache cleanup

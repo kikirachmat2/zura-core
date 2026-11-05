@@ -72,3 +72,4 @@ Agar pembahasan tidak melulu soal kalkulator gaji dan budgeting, sistem diwajibk
 ## 3. HIERARKI KENDALI SISTEM
 * **Zura (Autonomous COO & Pemimpin Redaksi)**: Memegang veto tertinggi terhadap seluruh naskah cerita dan balasan komentar. Zura berhak merombak (*rewrite*) naskah yang cacat logika menjadi naskah manusiawi yang tajam.
 * **Antigravity / Engineering Bot**: Menjaga infrastruktur, eksekusi multi-provider AI yang tahan banting (fallback Gemini $\rightarrow$ Groq 120B $\rightarrow$ OpenRouter), kalkulasi matematis presisi, dan database analytics.
+

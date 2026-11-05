@@ -6,9 +6,11 @@ CLI tool used by Kisah Komisi bot to consult Zura before:
 2. Replying to any netizen comment (Contextual relevance, First-person POV, Anti-bot)
 """
 
+import os
 import sys
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 # Add project root to sys.path
@@ -16,11 +18,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from core.brain import brain
+from core.memory import log_decision
 from ops.reality_verifier import audit_story_content, audit_financial_math
 from ops.shopee_curator import ShopeeCurator
 from ops.threads_governor import threads_governor
 
 logging.basicConfig(level=logging.ERROR)
+
+# Dedicated isolated chat ID for internal automated advisory so Kiki's personal Telegram chat history is never polluted
+INTERNAL_ADVISORY_CHAT_ID = int(os.environ.get("ZURA_ADVISORY_CHAT_ID", "999999"))
 
 def review_story(payload: dict) -> dict:
     topic = payload.get("topic", "")
@@ -128,7 +134,7 @@ OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
 }}
 Catatan: Jika draft ada cacat logika/hitung atau terasa berbau AI, Zura WAJIB menuliskan "revised_slides" versi sempurna yang 100% manusiawi, luwes, asimetris, akurat secara hitungan, dan siap publish!
 """
-    raw = brain.think(prompt, chat_id=1346696386)
+    raw = brain.think(prompt, chat_id=INTERNAL_ADVISORY_CHAT_ID)
     verdict = parse_json_safely(raw, fallback_slides=slides)
 
     # Merge deterministic flaws with LLM critique
@@ -208,7 +214,7 @@ OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
   "approved_reply": "Kalimat balasan final yang 100% nyambung dan siap kirim"
 }}
 """
-    raw = brain.think(prompt, chat_id=1346696386)
+    raw = brain.think(prompt, chat_id=INTERNAL_ADVISORY_CHAT_ID)
     verdict = parse_json_safely(raw, fallback_reply=draft_reply)
 
     # Secondary deterministic Lexicon Ring-Buffer Guard in Python:
@@ -241,8 +247,36 @@ def generate_bump(payload: dict) -> dict:
     topic = payload.get("topic", "")
     root_part = payload.get("root_part", "")
     last_part = payload.get("last_part", "")
+    views = payload.get("views", 0)
+    product_name = payload.get("product_name", "")
+    product_url = payload.get("product_url", "")
 
-    prompt = f"""
+    is_surge = views >= 500 and bool(product_url)
+
+    if is_surge:
+        prompt = f"""
+[ZURA THREAD BUMPER - SURGE AFFILIATE STRATEGY]
+Lu adalah Zura, COO pengarah karakter Kiki Rachmat (@kikipunyacerita).
+Thread ini sukses tembus {views:,} views di feed For You warganet!
+Netizen sedang ramai berdiskusi/curhat seputar isu ini: "{post_title}" ({topic}).
+
+TUGAS LU: Tuliskan SATU (1) balasan susulan (Add to thread / self-reply) santai yang menjawab keresahan warganet dengan merekomendasikan solusi praktis produk Shopee berikut:
+- Produk: "{product_name}"
+- Link Shopee: "{product_url}"
+
+ATURAN SURGE AFFILIATE KIKI (100% MANUSIAWI):
+1. Hubungkan produk sebagai PROBLEM SOLVER murni dari kesusahan yang dibahas di thread (misal: botol penahan dingin biar gak boncos jajan kopi, alat pengatur budget, wadah rapi kosan).
+2. Gaya bahasa: Manusiawi 100%, huruf kecil santai, jangan kaku kayak iklan TV.
+   Contoh pola: "btw banyak yg nanya solusinya, kmrn gue pake {product_name} ini lumayan nolong bgt biar ga ribet: {product_url}"
+3. Panjang: 100 - 220 karakter.
+
+OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID):
+{{
+  "bump_text": "teks susulan solusi Shopee Kiki di sini..."
+}}
+"""
+    else:
+        prompt = f"""
 [ZURA THREAD BUMPER - ORGANIC HUMAN SELF-REPLY]
 Lu adalah Zura, COO pengarah karakter Kiki Rachmat (@kikipunyacerita).
 Tugas lu: Tuliskan SATU (1) balasan susulan (Add to thread / self-reply) dari akun Kiki sendiri yang dipublish 2-3 jam setelah thread naik.
@@ -264,7 +298,7 @@ OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID):
   "bump_text": "teks susulan santai Kiki di sini..."
 }}
 """
-    raw = brain.think(prompt, chat_id=1346696386)
+    raw = brain.think(prompt, chat_id=INTERNAL_ADVISORY_CHAT_ID)
     cleaned = raw.strip()
     if "```json" in cleaned:
         cleaned = cleaned.split("```json")[1].split("```")[0].strip()
@@ -278,6 +312,29 @@ OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID):
         except Exception:
             pass
     return {"bump_text": "update: pas dipikir-pikir lagi situasi kayak gini emang serba salah bgt, tapi makasih banyak buat yang udah sharing pandangannya."}
+
+
+def record_story_feedback(payload: dict) -> dict:
+    story_id = payload.get("story_id")
+    title = payload.get("title", "")
+    views = payload.get("views", 0)
+    likes = payload.get("likes", 0)
+    replies = payload.get("replies", 0)
+    format_type = payload.get("format_type", "story")
+
+    # Record feedback directly to Zura's persistent decisions log & memory
+    log_decision(
+        domain="kisahkomisi_feedback",
+        trigger_event=f"Story #{story_id} ({format_type}) performance report",
+        decision_taken=f"Absorbed outcome into Zura analytical memory",
+        outcome=f"Title: '{title}' | Views: {views:,} | Likes: {likes} | Replies: {replies}"
+    )
+    return {
+        "status": "success",
+        "story_id": story_id,
+        "views": views,
+        "recorded_at": datetime.now().isoformat()
+    }
 
 
 def parse_json_safely(raw_text: str, fallback_slides=None, fallback_reply="") -> dict:
@@ -337,6 +394,8 @@ def main():
         result = review_reply(payload)
     elif mode == "--bump":
         result = generate_bump(payload)
+    elif mode == "--feedback":
+        result = record_story_feedback(payload)
     else:
         result = {"error": f"Unknown mode: {mode}"}
 
