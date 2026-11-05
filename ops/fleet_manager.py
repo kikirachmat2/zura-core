@@ -212,3 +212,4 @@ def sync_and_deploy_all(commit_msg: Optional[str] = None) -> Dict[str, Any]:
         results[f"{bot_id}_deploy"] = deploy_res
 
     return results
+
