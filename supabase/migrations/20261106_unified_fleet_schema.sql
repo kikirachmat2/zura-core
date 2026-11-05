@@ -135,3 +135,4 @@ VALUES
 ON CONFLICT (bot_id) DO UPDATE SET 
     updated_at = NOW(),
     status = EXCLUDED.status;
+

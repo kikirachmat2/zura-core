@@ -574,6 +574,26 @@ class ZuraOrchestrator:
                 await self.send_text(session, chat_id, f"⚠️ Gagal cek fleet: {e}")
             return
 
+        if text.lower() in ["/fleet_code", "fleet_code", "/sync_fleet", "sync_fleet"]:
+            try:
+                from ops.fleet_manager import get_fleet_git_status
+                statuses = await asyncio.to_thread(get_fleet_git_status)
+                lines = [
+                    "🛠️ <b>FLEET CODE & REPOSITORY STATUS:</b>\n"
+                ]
+                for b_id, s in statuses.items():
+                    icon = "🟡 Berubah" if s.get("has_changes") else "🟢 Bersih"
+                    lines.append(f"• <b>{s.get('name')}</b> ({icon})")
+                    lines.append(f"  └ Branch: <code>{s.get('branch')}</code> ({s.get('commit')})")
+                    if s.get("has_changes"):
+                        lines.append(f"  └ File berubah: {s.get('modified_files_count')} file")
+                lines.append("\n<i>Takeover aktif. Perubahan code disinkronkan & di-deploy otomatis ke Server 1.</i>")
+                await self.send_text(session, chat_id, "\n".join(lines))
+            except Exception as e:
+                await self.send_text(session, chat_id, f"⚠️ Gagal cek status fleet: {e}")
+            return
+
+
 
         if text.lower() in ["/wifi", "wifi"]:
             res = wifi_watchdog.auto_heal_network()
