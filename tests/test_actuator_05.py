@@ -328,9 +328,10 @@ class TestKiBotAuditAndRotation(BaseIsolatedTestCase):
 
         # Perform 4 tunes to trigger 3-backup rotation
         for val in [1500000.0, 750000.0, 1500000.0, 750000.0]:
-            # Advance persistent rate limit to permit tuning
+            # Advance persistent rate limit to permit tuning and service restart
             from core.actuator import record_persistent_rate_limit
             record_persistent_rate_limit("kibot_tune_env", "localhost", "MAX_SINGLE_TRADE_IDR", 0.0)
+            record_persistent_rate_limit("kibot_restart_service", "localhost", "kibot-v3-core.service", 0.0)
             res = controller.tune_market_regime("BULL", max_trade_idr=val)
             self.assertTrue(res.get("success"))
 
