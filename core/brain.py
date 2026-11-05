@@ -11,7 +11,7 @@ import requests
 import psutil
 from typing import List, Dict, Any, Optional
 from core.config import GEMINI_API_KEY, GEMINI_MODEL, GROQ_API_KEY, OPENROUTER_API_KEY
-from core.memory import get_recent_chat, save_message, get_recent_decisions
+from core.memory import get_recent_chat, save_message, get_recent_decisions, get_all_user_preferences
 
 logger = logging.getLogger("ZuraBrain")
 
@@ -52,10 +52,34 @@ class ZuraBrain:
 
     def think(self, user_prompt: str, chat_id: int = 0, extra_context: Optional[str] = None) -> str:
         """Processes input prompt and returns Zura's response."""
-        # 1. Gather recent conversation memory
+        # 1. Gather recent conversation memory & long-term episodic preferences
         history = get_recent_chat(chat_id, limit=8)
-        
-        # 2. Append system context and recent decisions
+        user_prefs = get_all_user_preferences()
+        prefs_summary = ""
+        if user_prefs:
+            prefs_summary = "\n[Permanent Memory - Bos Kiki Profile & Preferences]:\n" + "\n".join(
+                [f"- {k}: {v}" for k, v in user_prefs.items()]
+            )
+
+        # 2. Situational EQ & Mood Detection (Adaptive Persona Switcher)
+        prompt_lower = user_prompt.lower()
+        fatigue_keywords = [
+            "capek", "lelah", "pusing", "mumet", "drop", "sakit", "stress",
+            "berat", "istirahat", "tidur", "burnout", "penat", "pegel",
+            "shooting", "syuting", "manake"
+        ]
+        is_user_fatigued = any(k in prompt_lower for k in fatigue_keywords)
+        eq_inject = ""
+        if is_user_fatigued:
+            eq_inject = (
+                "\n[SITUATIONAL EQ PROTOCOL - EMPATHETIC CALM MODE ACTIVE]:\n"
+                "- Bos Kiki terdeteksi sedang lelah fisik/mental atau baru selesai produksi lapangan.\n"
+                "- TURUNKAN sarkasme dan nada tajam. DILARANG menagih ROI, cuan, atau membicarakan beban kerja baru.\n"
+                "- Berikan jawaban yang menenangkan, suportif, santun, dan ringkas.\n"
+                "- REASSURANCE: Tegaskan bahwa seluruh armada (server SG1/SG2, KiBot, dan Threads) berjalan 100% aman dan terkendali, sehingga Bos Kiki bisa beristirahat dengan tenang tanpa khawatir.\n"
+            )
+
+        # 3. Append system context and recent decisions
         recent_decisions = get_recent_decisions(limit=3)
         decisions_summary = ""
         if recent_decisions:
@@ -63,7 +87,7 @@ class ZuraBrain:
                 [f"- {d['domain']}: {d['decision_taken']} -> {d['outcome']}" for d in recent_decisions]
             )
 
-        full_system = ZURA_SYSTEM_PROMPT + decisions_summary
+        full_system = ZURA_SYSTEM_PROMPT + prefs_summary + eq_inject + decisions_summary
         if extra_context:
             full_system += f"\n[Live System Telemetry / Sensor Data]:\n{extra_context}\n"
 

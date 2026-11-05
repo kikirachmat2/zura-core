@@ -81,8 +81,23 @@ def init_db():
                 timestamp REAL
             )
         """)
+
+        # 6. Long-Term Episodic User Profile & Preferences
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                key TEXT UNIQUE NOT NULL,
+                value TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                updated_at REAL
+            )
+        """)
         
         conn.commit()
+
+    # Seed default baseline preferences if empty
+    seed_default_kiki_preferences()
 
 
 # --- Decision Ledger Helpers ---
@@ -210,6 +225,54 @@ def get_monthly_finance_summary(month_prefix: str = "") -> Dict[str, Any]:
             "net_cashflow_idr": net,
             "savings_rate_pct": savings_rate
         }
+
+
+# --- Long-Term Episodic User Profile & Preferences ---
+def set_user_preference(category: str, key: str, value: str, confidence: float = 1.0):
+    """Stores or updates a permanent preference or life-context attribute for Bos Kiki."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO user_preferences (category, key, value, confidence, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET 
+                category=excluded.category,
+                value=excluded.value,
+                confidence=excluded.confidence,
+                updated_at=excluded.updated_at
+        """, (category, key, value, confidence, time.time()))
+        conn.commit()
+
+
+def get_all_user_preferences() -> Dict[str, str]:
+    """Retrieves all permanent user profile attributes for prompt injection."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM user_preferences")
+        rows = cursor.fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+
+def seed_default_kiki_preferences():
+    """Seeds baseline permanent preferences for Bos Kiki so Zura never has amnesia."""
+    defaults = [
+        ("identity", "core_role", "Software Developer & Tech Builder (Acong-AI, Olimpiakids, Monev Reminder, Kisah Komisi, Zura Core)."),
+        ("identity", "creative_role", "Producer / Line Producer di industri film & media (ClosedBook, Manake Rental). Jika sedang lelah jadwal syuting/produksi, Zura wajib memprioritaskan dukungan suportif daripada menuntut cuan."),
+        ("communication", "tone_preference", "Suka gaya santai, ceplas-ceplos gaul Jakarta, to the point, benci basa-basi PR atau birokrasi bertele-tele."),
+        ("lifestyle", "working_cadence", "Night-owl coder, sering aktif tengah malam. Dilarang spam notifikasi hal sepele di jam istirahat."),
+        ("fleet", "hardware_fleet", "MacBook Pro 2020 (workhorse utama), POCO M3 (node server & sentry via wireless ADB), 2 OCI Server SG1 & SG2 (cloud cluster), OCI Batam (target sniper).")
+    ]
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as cnt FROM user_preferences")
+        row = cursor.fetchone()
+        if row and row["cnt"] == 0:
+            for cat, k, v in defaults:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO user_preferences (category, key, value, confidence, updated_at)
+                    VALUES (?, ?, ?, 1.0, ?)
+                """, (cat, k, v, time.time()))
+            conn.commit()
 
 
 # Initialize DB on load
