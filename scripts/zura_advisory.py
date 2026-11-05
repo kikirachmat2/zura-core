@@ -138,6 +138,16 @@ Catatan: Jika draft ada cacat logika/hitung atau terasa berbau AI, Zura WAJIB me
         verdict["is_approved"] = False
         verdict["recommended_action"] = "USE_REVISED"
 
+    # Empirical Warganet Metrics Validation (Anti-Echo Chamber)
+    empirical = threads_governor.calculate_empirical_alignment_score(slides, topic=topic)
+    verdict["empirical_score"] = empirical.get("score", 100.0)
+    verdict["empirical_passed"] = empirical.get("passed", True)
+    if not empirical.get("passed"):
+        if verdict.get("recommended_action") == "APPROVE":
+            verdict["is_approved"] = False
+            verdict["recommended_action"] = "USE_REVISED"
+        verdict["critique"] = (verdict.get("critique") or "") + " [Audit Empiris Warganet]: " + "; ".join(empirical.get("reasons", []))
+
     if healed_affiliate:
         verdict["healed_affiliate"] = healed_affiliate
         verdict["product_name"] = product_name

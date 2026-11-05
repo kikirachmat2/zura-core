@@ -182,8 +182,18 @@ class MobileSentinel:
             if telemetry["temp_c"] >= self.SAFE_MAX_BATTERY_TEMP_C:
                 telemetry["thermal_warning"] = True
 
-            # 3. Overcharge ceiling check
-            if telemetry["is_charging"] and telemetry["level"] >= self.OPTIMAL_CHARGE_CEILING:
+            # 3. Overcharge ceiling check (Context-Aware: Dynamic 80% vs 100% Field Mode)
+            ceiling = self.OPTIMAL_CHARGE_CEILING
+            field_mode = get_state("mobile_field_mode", {})
+            import time
+            if field_mode.get("active") and time.time() < field_mode.get("expires_at", 0):
+                ceiling = 100
+                telemetry["field_mode_active"] = True
+            else:
+                telemetry["field_mode_active"] = False
+
+            telemetry["charge_ceiling"] = ceiling
+            if telemetry["is_charging"] and telemetry["level"] >= ceiling:
                 telemetry["overcharge_warning"] = True
 
             set_state("poco_telemetry", telemetry)
@@ -221,6 +231,40 @@ class MobileSentinel:
             return {"success": True, "actions": actions}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+
+    def set_field_work_mode(self, enabled: bool = True, duration_hours: float = 12.0) -> Dict[str, Any]:
+        """
+        Context-Aware Charging Mode:
+        Overrides the 80% battery conservation ceiling to 100% full capacity
+        when Bos Kiki is traveling, attending film production shoots, or requires maximum battery utility.
+        """
+        import time
+        if enabled:
+            expires_at = time.time() + (duration_hours * 3600.0)
+            state = {
+                "active": True,
+                "duration_hours": duration_hours,
+                "expires_at": expires_at,
+                "activated_at": time.time()
+            }
+            set_state("mobile_field_mode", state)
+            log_decision(
+                domain="mobile_sentinel",
+                trigger_event="Field work mode requested",
+                decision_taken=f"Raised POCO M3 charge ceiling to 100% for {duration_hours}h",
+                outcome="SUCCESS"
+            )
+            return {"active": True, "charge_ceiling": 100, "duration_hours": duration_hours}
+        else:
+            set_state("mobile_field_mode", {"active": False})
+            log_decision(
+                domain="mobile_sentinel",
+                trigger_event="Field work mode deactivated",
+                decision_taken="Restored POCO M3 charge ceiling to 80% conservation mode",
+                outcome="SUCCESS"
+            )
+            return {"active": False, "charge_ceiling": self.OPTIMAL_CHARGE_CEILING}
 
 
 # Global instance

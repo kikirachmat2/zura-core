@@ -248,12 +248,48 @@ class IndodaxReconciler:
         audit_result["dca_multiplier"] = dca_plan["multiplier"]
         audit_result["regime_advice"] = dca_plan["advice"]
 
+        # Dynamic Cycle Profit-Taking & Rebalance Evaluation (Extreme Greed Exit Guard)
+        rebalance_plan = self.evaluate_cycle_rebalancing(fng_val, local_snapshot)
+        audit_result["rebalance_plan"] = rebalance_plan
+
         # Check Nonce Clock Health
         nonce_health = self.verify_nonce_health()
         audit_result["nonce_health"] = nonce_health
 
         set_state("kibot_audit", audit_result)
         return audit_result
+
+    def evaluate_cycle_rebalancing(self, fng_value: int, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dynamic Profit-Taking & Cycle Exit Strategy:
+        Solves the 'One-Way Accumulation Trap'.
+        When market hits Extreme Greed (F&G >= 80), recommends securing 15-20% gains into liquid IDR.
+        """
+        if fng_value >= 80:
+            return {
+                "action": "TAKE_PROFIT_REBALANCE",
+                "target_take_profit_pct": 15.0,
+                "urgency": "HIGH",
+                "advice": (
+                    f"⚠️ Sinyal Puncak Pasar (F&G: {fng_value} Extreme Greed)! "
+                    "Zura merekomendasikan Take Profit parsial 15-20% dari aset crypto "
+                    "kembali ke saldo IDR di Indodax untuk mengunci keuntungan sebelum koreksi tajam."
+                )
+            }
+        elif fng_value >= 70:
+            return {
+                "action": "PREPARE_TAKE_PROFIT",
+                "target_take_profit_pct": 5.0,
+                "urgency": "MODERATE",
+                "advice": f"Pasar mendekati zona euphoria (F&G: {fng_value}). Siapkan skenario cicil take profit jika tren terus berlanjut."
+            }
+        else:
+            return {
+                "action": "MAINTAIN_PORTFOLIO",
+                "target_take_profit_pct": 0.0,
+                "urgency": "NONE",
+                "advice": "Pasar dalam siklus wajar/akumulasi. Pertahankan posisi aset."
+            }
 
     def get_volatility_weighted_dca_plan(self, fng_value: int) -> Dict[str, Any]:
         """
