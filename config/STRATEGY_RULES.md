@@ -73,3 +73,11 @@ Agar pembahasan tidak melulu soal kalkulator gaji dan budgeting, sistem diwajibk
 * **Zura (Autonomous COO & Pemimpin Redaksi)**: Memegang veto tertinggi terhadap seluruh naskah cerita dan balasan komentar. Zura berhak merombak (*rewrite*) naskah yang cacat logika menjadi naskah manusiawi yang tajam.
 * **Antigravity / Engineering Bot**: Menjaga infrastruktur, eksekusi multi-provider AI yang tahan banting (fallback Gemini $\rightarrow$ Groq 120B $\rightarrow$ OpenRouter), kalkulasi matematis presisi, dan database analytics.
 
+---
+
+## 4. ATURAN PENGELOLAAN KODE & DEVOPS (MANDAT BOS KIKI)
+* **Aturan Mutlak Commit Langsung**: Setiap kali ada modifikasi, penambahan fitur, bugfix, atau perubahan file kode di repositori manapun (Zura Core, Kisah Komisi, maupun KiBot V3), agen **WAJIB LANGSUNG** membuat Git Commit saat itu juga.
+* **Dilarang Menumpuk Perubahan Tanpa Commit**: Tidak boleh membiarkan working tree berstatus `modified` atau `untracked`. Setiap tahap penyelesaian tugas = langsung commit terstruktur dan bersih.
+* **Deploy Sinkron**: Jika perubahan menyentuh daemon aktif di Server 1, jalankan sinkronisasi dan reload servis via pipeline fleet manager (`python3 scripts/fleet_deploy.py --sync "pesan commit"`).
+
+
