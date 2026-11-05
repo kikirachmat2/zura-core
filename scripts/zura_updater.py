@@ -26,6 +26,7 @@ import sqlite3
 import subprocess
 import urllib.request
 import urllib.parse
+from typing import Tuple, Dict, Any, Optional
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent

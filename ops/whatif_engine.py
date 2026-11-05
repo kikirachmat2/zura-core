@@ -279,3 +279,4 @@ class WhatIfContingencyEngine:
 
 # Global contingency engine instance
 whatif_engine = WhatIfContingencyEngine()
+

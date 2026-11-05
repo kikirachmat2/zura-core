@@ -31,6 +31,7 @@ class TestGitOps01bIsolated(unittest.TestCase):
         # 1. Create bare remote
         self.bare_dir = self.tmp_path / "remote.git"
         subprocess.run(["git", "init", "--bare", str(self.bare_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=str(self.bare_dir), check=True)
 
         # 2. Create dev clone to seed repo and push commits
         self.dev_dir = self.tmp_path / "dev_repo"
@@ -41,8 +42,8 @@ class TestGitOps01bIsolated(unittest.TestCase):
         subprocess.run(["git", "config", "user.email", "tester@zura.local"], cwd=str(self.dev_dir), check=True)
 
         # Populate minimal runnable Zura skeleton in dev_repo
-        (self.dev_dir / "core").mkdir(parents=True)
-        (self.dev_dir / "ans").mkdir(parents=True)
+        (self.dev_dir / "core").mkdir(parents=True, exist_ok=True)
+        (self.dev_dir / "ans").mkdir(parents=True, exist_ok=True)
         (self.dev_dir / "main.py").write_text("#!/usr/bin/env python3\nprint('Zura Test Node')\n")
         (self.dev_dir / "core/__init__.py").write_text("")
         (self.dev_dir / "core/config.py").write_text(f"from pathlib import Path\nBASE_DIR = Path('{self.dev_dir}')\nGITOPS_BRANCH = 'main'\nTELEGRAM_BOT_TOKEN = ''\nTELEGRAM_CHAT_ID = 0\nDB_PATH = BASE_DIR / 'zura.db'\n")
@@ -59,11 +60,12 @@ class TestGitOps01bIsolated(unittest.TestCase):
 
         # 3. Create prod clone (target monitored node)
         self.prod_dir = self.tmp_path / "prod_repo"
-        subprocess.run(["git", "clone", str(self.bare_dir), str(self.prod_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "-b", "main", str(self.bare_dir), str(self.prod_dir)], check=True, capture_output=True)
         subprocess.run(["git", "config", "user.name", "Zura Prod"], cwd=str(self.prod_dir), check=True)
         subprocess.run(["git", "config", "user.email", "prod@zura.local"], cwd=str(self.prod_dir), check=True)
 
         # Update core/config.py in prod_dir to point to prod_dir
+        (self.prod_dir / "core").mkdir(parents=True, exist_ok=True)
         (self.prod_dir / "core/config.py").write_text(f"from pathlib import Path\nBASE_DIR = Path('{self.prod_dir}')\nGITOPS_BRANCH = 'main'\nTELEGRAM_BOT_TOKEN = ''\nTELEGRAM_CHAT_ID = 0\nDB_PATH = BASE_DIR / 'zura.db'\n")
         subprocess.run(["git", "commit", "-am", "configure prod BASE_DIR"], cwd=str(self.prod_dir), check=True)
         subprocess.run(["git", "push", "origin", "main"], cwd=str(self.prod_dir), check=True)

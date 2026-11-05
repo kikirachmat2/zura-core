@@ -32,6 +32,7 @@ class TestGitOps01cEdgeCases(unittest.TestCase):
         # 1. Bare remote
         self.bare_dir = self.tmp_path / "remote.git"
         subprocess.run(["git", "init", "--bare", str(self.bare_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=str(self.bare_dir), check=True)
 
         # 2. Dev clone
         self.dev_dir = self.tmp_path / "dev_repo"
@@ -40,9 +41,9 @@ class TestGitOps01cEdgeCases(unittest.TestCase):
         subprocess.run(["git", "config", "user.email", "test@zura.local"], cwd=str(self.dev_dir), check=True)
 
         # Seed initial files
-        (self.dev_dir / "core").mkdir(parents=True)
-        (self.dev_dir / "ans").mkdir(parents=True)
-        (self.dev_dir / "scripts").mkdir(parents=True)
+        (self.dev_dir / "core").mkdir(parents=True, exist_ok=True)
+        (self.dev_dir / "ans").mkdir(parents=True, exist_ok=True)
+        (self.dev_dir / "scripts").mkdir(parents=True, exist_ok=True)
         (self.dev_dir / ".gitignore").write_text("venv/\n__pycache__/\n*.pyc\n")
         (self.dev_dir / "main.py").write_text("print('init')\n")
         (self.dev_dir / "core/__init__.py").write_text("")
@@ -58,7 +59,7 @@ class TestGitOps01cEdgeCases(unittest.TestCase):
 
         # 3. Prod clone
         self.prod_dir = self.tmp_path / "prod_repo"
-        subprocess.run(["git", "clone", str(self.bare_dir), str(self.prod_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "-b", "main", str(self.bare_dir), str(self.prod_dir)], check=True, capture_output=True)
         subprocess.run(["git", "config", "user.name", "Prod"], cwd=str(self.prod_dir), check=True)
         subprocess.run(["git", "config", "user.email", "prod@zura.local"], cwd=str(self.prod_dir), check=True)
 
