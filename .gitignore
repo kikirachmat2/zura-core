@@ -39,3 +39,7 @@ temp_voice/
 *.wav
 
 *.csv
+
+# Release Bundles & Manifests
+zura_release_bundle.tar.gz
+zura_release_manifest.txt

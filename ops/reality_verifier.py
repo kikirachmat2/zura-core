@@ -237,3 +237,4 @@ def audit_story_content(payload: Dict[str, Any]) -> Dict[str, Any]:
         "logic_flaws": all_flaws,
         "critique": "; ".join(all_flaws) if all_flaws else "Hitungan matematis akurat dan logika geografi 100% realistis."
     }
+
