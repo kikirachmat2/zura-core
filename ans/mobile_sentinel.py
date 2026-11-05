@@ -10,11 +10,19 @@ Per Zura Charter v2:
 import os
 import re
 import sys
+import shutil
 import logging
 import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
+
+# Ensure standard bin paths are in PATH (needed when running under launchd)
+for p in ["/usr/local/bin", "/opt/homebrew/bin"]:
+    if p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
+
+ADB_BIN = shutil.which("adb") or "/usr/local/bin/adb"
 
 # Add project root to sys.path
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -39,7 +47,7 @@ class MobileSentinel:
         """Runs `adb devices` and maps serial -> status."""
         devices = {}
         try:
-            res = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=5)
+            res = subprocess.run([ADB_BIN, "devices"], capture_output=True, text=True, timeout=5)
             for line in res.stdout.splitlines()[1:]:
                 parts = line.strip().split()
                 if len(parts) >= 2:
@@ -64,7 +72,7 @@ class MobileSentinel:
             return self.device_ip or None
 
         try:
-            cmd = ["adb", "-s", target, "shell", "ip", "-f", "inet", "addr", "show", "wlan0"]
+            cmd = [ADB_BIN, "-s", target, "shell", "ip", "-f", "inet", "addr", "show", "wlan0"]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", res.stdout)
             if match:
@@ -86,7 +94,7 @@ class MobileSentinel:
         if not target:
             # If not on USB, attempt to connect to existing IP
             if ip:
-                conn_res = subprocess.run(["adb", "connect", f"{ip}:{port}"], capture_output=True, text=True, timeout=5)
+                conn_res = subprocess.run([ADB_BIN, "connect", f"{ip}:{port}"], capture_output=True, text=True, timeout=5)
                 return {
                     "success": "connected" in conn_res.stdout.lower(),
                     "mode": "wireless_reconnect",
@@ -98,13 +106,13 @@ class MobileSentinel:
 
         try:
             # 1. Enable TCP/IP on device
-            subprocess.run(["adb", "-s", target, "tcpip", str(port)], capture_output=True, text=True, timeout=6)
+            subprocess.run([ADB_BIN, "-s", target, "tcpip", str(port)], capture_output=True, text=True, timeout=6)
             import time
             time.sleep(2.0)  # Allow adbd daemon to rebind in TCP mode
             
             # 2. Connect via Wi-Fi if IP is known
             if ip:
-                conn = subprocess.run(["adb", "connect", f"{ip}:{port}"], capture_output=True, text=True, timeout=6)
+                conn = subprocess.run([ADB_BIN, "connect", f"{ip}:{port}"], capture_output=True, text=True, timeout=6)
                 is_connected = ("connected" in conn.stdout.lower() or "already connected" in conn.stdout.lower())
                 return {
                     "success": is_connected,
@@ -155,7 +163,7 @@ class MobileSentinel:
 
         try:
             # 1. Battery Dump
-            res = subprocess.run(["adb", "-s", active_target, "shell", "dumpsys", "battery"], capture_output=True, text=True, timeout=5)
+            res = subprocess.run([ADB_BIN, "-s", active_target, "shell", "dumpsys", "battery"], capture_output=True, text=True, timeout=5)
             for line in res.stdout.splitlines():
                 line = line.strip()
                 if line.startswith("level:"):
@@ -197,11 +205,11 @@ class MobileSentinel:
         actions = []
         try:
             # Dim screen
-            subprocess.run(["adb", "-s", target, "shell", "settings", "put", "system", "screen_brightness", "10"], capture_output=True, timeout=4)
+            subprocess.run([ADB_BIN, "-s", target, "shell", "settings", "put", "system", "screen_brightness", "10"], capture_output=True, timeout=4)
             actions.append("screen_dimmed_to_10")
             
             # Kill background hogs
-            subprocess.run(["adb", "-s", target, "shell", "am", "kill-all"], capture_output=True, timeout=4)
+            subprocess.run([ADB_BIN, "-s", target, "shell", "am", "kill-all"], capture_output=True, timeout=4)
             actions.append("background_apps_killed")
 
             log_decision(

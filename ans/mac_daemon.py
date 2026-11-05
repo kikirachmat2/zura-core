@@ -19,6 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from ans.mac_sentinel import mac_sentinel
+from ans.mobile_sentinel import mobile_sentinel
 from network.wifi_watchdog import wifi_watchdog
 from network.aggressive_wifi import aggressive_wifi
 from core.config import LOGS_DIR
@@ -85,6 +86,20 @@ def main():
                 aggr_res = aggressive_wifi.run_aggressive_cycle()
                 if aggr_res.get("actions"):
                     logger.info(f"🔓 Aggressive Wi-Fi Action: {aggr_res['actions']}")
+
+            # 3. Mobile Device Sentinel (POCO M3) Safeguard (Every 60s)
+            if cycle % 2 == 0:
+                try:
+                    m_tele = mobile_sentinel.read_telemetry()
+                    if m_tele.get("connected"):
+                        if m_tele.get("thermal_warning"):
+                            logger.warning(f"🔥 POCO M3 Battery Overheat: {m_tele['temp_c']}°C >= 40°C! Triggering thermal protection...")
+                            prot = mobile_sentinel.execute_thermal_protection()
+                            logger.info(f"Mobile thermal protection executed: {prot}")
+                        elif m_tele.get("overcharge_warning") and cycle % 10 == 0:
+                            logger.info(f"🔋 POCO M3 Battery at {m_tele['level']}% (>=80% optimal ceiling while charging).")
+                except Exception as m_err:
+                    logger.debug(f"Mobile Sentinel cycle check: {m_err}")
 
         except Exception as e:
             logger.error(f"Mac Sentinel loop error: {e}")

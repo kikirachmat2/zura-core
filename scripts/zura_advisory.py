@@ -18,6 +18,7 @@ sys.path.insert(0, str(BASE_DIR))
 from core.brain import brain
 from ops.reality_verifier import audit_story_content, audit_financial_math
 from ops.shopee_curator import ShopeeCurator
+from ops.threads_governor import threads_governor
 
 logging.basicConfig(level=logging.ERROR)
 
@@ -62,16 +63,33 @@ def review_story(payload: dict) -> dict:
             + "\nPERINGATAN: Zura WAJIB merombak total angka-angka atau detail geografi di atas pada 'revised_slides' agar 100% lolos audit @meta.ai dan tidak dirujak warganet!\n"
         )
 
+    # 2. Shared Database Context: Top Viral Exemplars & Recent Stories Anti-Repetition
+    viral_exemplars = threads_governor.get_top_viral_exemplars(limit=2)
+    viral_context_str = ""
+    if viral_exemplars:
+        viral_context_str = "\n[POLA HOOK VIRAL AKUN KIKI (PULUHAN RIBU VIEWS) - TIRU IRAMA & CLOSING-NYA]:\n"
+        for ex in viral_exemplars:
+            viral_context_str += f"- Judul: {ex['title']} ({ex['max_views']:,} views)\n  Opening: \"{ex['first_slide'][:140]}...\"\n  Closing: \"{ex['last_slide'][:140]}...\"\n"
+
+    recent_stories = threads_governor.get_recent_stories(limit=6)
+    recent_stories_str = ""
+    if recent_stories:
+        recent_stories_str = "\n[POSTINGAN TERAKHIR TAYANG - DILARANG MENGULANG TOPIK, NOMINAL GAJI, ATAU POLA INI]:\n"
+        for rs in recent_stories[:5]:
+            recent_stories_str += f"- #{rs['id']} {rs['title']}: \"{rs['first_slide'][:90]}...\"\n"
+
     prompt = f"""
-[ZURA EDITORIAL GATEKEEPER - MANDATORY STORY QC & REWRITE]
-Lu adalah Zura, COO & Pemimpin Redaksi eksekutif akun Threads @kikipunyacerita.
-Bos Kiki marah besar karena konten sebelumnya kelihatan tolol, gak mikir, dan kaku kayak bot AI:
-- Masa ngekos di Surabaya dibilang naik KRL (Surabaya gak ada KRL!).
-- Masa udah bayar sewa kontrakan tapi nyicil KPR barengan tanpa konteks logis.
-- Masa cerita kebocoran rahasia negara diselingi sabun cuci muka tiba-tiba.
-- Angka-angka kaku dipaksakan kayak template laporan kantor, dan kalau dijumlahkan malah tekor atau gak balance!
+[ZURA EDITORIAL GATEKEEPER - MANDATORY MULTI-PASS STORY QC & REWRITE]
+Lu adalah Zura, Digital COO & Pemimpin Redaksi eksekutif akun Threads @kikipunyacerita milik Kiki Rachmat.
+Bos Kiki marah besar jika konten kelihatan seperti buatan AI, repetitif, atau kaku:
+- Paragraf terlalu simetris dan rapi (AI banget!).
+- Mengulang-ulang nominal gaji 6jt atau kosan yang sama dengan postingan kemarin.
+- Transisi produk jualan Shopee yang tiba-tiba dan maksa (non-sequitur).
+- Bahasa kaku template bullet-point atau pakai frasa formal PR: "menilik", "sejatinya", "kendati demikian", "ternyata oh ternyata", "yuk simak".
 {flaws_prompt_inject}
-TUGAS LU: Evaluasi draft di bawah ini dengan standar tajam, logis, dan 100% manusiawi warganet Threads.
+{viral_context_str}
+{recent_stories_str}
+TUGAS LU: Lakukan Multi-Pass Human Type Checking terhadap draft di bawah ini. Pastikan 100% berjiwa manusia asli warganet Threads Indonesia, tajam, dan memicu perdebatan sengit.
 
 DATA DRAFT KONTEN:
 - Format: {format_type}
@@ -82,13 +100,20 @@ DATA DRAFT KONTEN:
 - Isi Slides:
 {slides_text}
 
-KRITERIA PENILAIAN ZURA:
+STANDAR LOLOS KURASI ZURA (DOUBLE-CHECKING HUMAN PERSONA):
 1. Logika & Kewarasan Konteks & Matematika:
-   - Jika ada rincian alokasi gaji / budget, TOTAL SEMUA PENGELUARAN + TABUNGAN WAJIB 100% SAMA DENGAN GAJI YANG DIKLAIM (Anti-Audit Meta AI).
+   - Jika ada rincian alokasi gaji / budget, TOTAL PENGELUARAN + TABUNGAN WAJIB 100% SAMA DENGAN GAJI YANG DIKLAIM.
    - Transportasi wajib sesuai kota (KRL/MRT/LRT hanya di Jabodetabek & Yogya-Solo).
-2. Deteksi AI / Kelihatan Robot: Gaya mengalir natural seperti manusia asli curhat di Threads (lowercase santai, berantakan emosional), bukan kaku template bullet-point AI.
-3. Penempatan Affiliate (jika ada): Produk harus menjadi problem solver alami dari masalah yang dibahas, bukan selingan mendadak. DILARANG ADA FRASA IKLAN CANGGUNG ('selingan dikit', 'btw kemarin gue checkout').
-4. Ending Dilema Polarisasi Ekstrem: Slide terakhir memicu perdebatan sengit dua kubu yang memaksa netizen memihak dan berkomentar tanpa toxic hate-speech.
+2. Anti-AI Smell & Variasi Ritme:
+   - DILARANG membuat slide simetris dengan panjang kata yang sama.
+   - Gunakan variasi ritme manusia: celetukan 2-3 kata ("anjir cape.", "asli pusing."), diikuti cerita santai mengalir, serba huruf kecil (lowercase).
+   - DILARANG frasa AI sok asik ("kalian tim mana nih?", "menarik untuk dibahas").
+3. Anti-Repetisi:
+   - Wajib berbeda topik dan sudut pandang dari postingan terakhir.
+4. Penempatan Affiliate (jika ada):
+   - Produk wajib jadi problem solver alami, bukan iklan tiba-tiba. ZERO kata iklan canggung ('btw kemarin checkout', 'selingan dikit').
+5. Ending Dilema Polarisasi Ekstrem:
+   - Slide terakhir memicu perdebatan dua kubu yang memaksa netizen speak up di kolom komentar tanpa ujaran kebencian.
 
 OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
 {{
@@ -98,7 +123,7 @@ OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
   "revised_slides": ["Slide 1 revisi Zura", "Slide 2 revisi Zura", "Slide 3 revisi Zura", "Slide 4 revisi Zura"],
   "recommended_action": "APPROVE" / "USE_REVISED" / "REJECT"
 }}
-Catatan: Jika draft ada cacat logika/hitung atau terasa kaku AI, Zura WAJIB menuliskan "revised_slides" versi sempurna yang 100% manusiawi, luwes, masuk akal, hitungan matematis akurat, dan siap publish!
+Catatan: Jika draft ada cacat logika/hitung atau terasa berbau AI, Zura WAJIB menuliskan "revised_slides" versi sempurna yang 100% manusiawi, luwes, asimetris, akurat secara hitungan, dan siap publish!
 """
     raw = brain.think(prompt, chat_id=1346696386)
     verdict = parse_json_safely(raw, fallback_slides=slides)
@@ -128,15 +153,23 @@ def review_reply(payload: dict) -> dict:
     comment_text = payload.get("comment_text", "")
     draft_reply = payload.get("draft_reply", "")
 
+    # Lexicon Ring Buffer: Retrieve recent replies to prevent repetitive phrasing
+    recent_replies = threads_governor.get_recent_auto_replies(limit=15)
+    recent_replies_list = [r["reply"].strip() for r in recent_replies if r.get("reply")]
+    recent_replies_str = ""
+    if recent_replies_list:
+        recent_replies_str = "\n[BALASAN YANG SUDAH DIPAKAI TERAKHIR - DILARANG KERAS MENGULANG POLA / KATA PEMBUKA INI]:\n" + "\n".join([f"- \"{rep}\"" for rep in recent_replies_list[:8]])
+
     prompt = f"""
-[ZURA AUTO-REPLY GATEKEEPER - MANDATORY CONTEXTUAL QC]
-Lu adalah Zura, COO pengawas akun Threads @kikipunyacerita milik Kiki Rachmat.
-Bos Kiki ngamuk karena balasan auto-reply bot sebelumnya SAMPAH dan GAK NYAMBUNG:
+[ZURA AUTO-REPLY GATEKEEPER - MANDATORY CONTEXTUAL QC & LEXICON DIVERSITY]
+Lu adalah Zura, Digital COO pengawas akun Threads @kikipunyacerita milik Kiki Rachmat.
+Bos Kiki ngamuk karena balasan auto-reply bot sebelumnya SAMPAH, GAK NYAMBUNG, atau POLA NYA MENGULANG-ULANG:
 - Ada orang nanya "Kerja apa di Tangerang?", malah dibalas "wkwk asli relate bgt ini mah" (goblok banget, orang nanya malah dibilang relate!).
 - Ada orang curhat naik motor ke stasiun, malah dibalas "bukan bot woy haha jari gue masih pegel" (gak nyambung sama sekali!).
-- Postingan bahas Surabaya, balasannya malah nyebut kosan Jakpus.
+- Komentar dibalas berulang-ulang pakai kata pembuka: "anjir valid bgt". Netizen langsung ngeh ini bot kalau polanya berulang!
+{recent_replies_str}
 
-TUGAS LU: Pastikan balasan Kiki 100% NYAMBUNG ke komentar orang ini dan postingan aslinya, bernada manusia asli (first-person POV Kiki budak media santai), gak template, dan mancing diskusi lanjutan.
+TUGAS LU: Pastikan balasan Kiki 100% NYAMBUNG ke komentar netizen dan postingan aslinya, bernada manusia asli warganet Jakarta (first-person POV Kiki budak media yang santai), tidak template, dan mancing diskusi lanjutan.
 
 KONTEKS LENGKAP:
 - Postingan Asli: "{post_title}"
@@ -144,11 +177,16 @@ KONTEKS LENGKAP:
 - Komentar Netizen (@{commenter}): "{comment_text}"
 - Draft Balasan Awal: "{draft_reply}"
 
-KRITERIA BALASAN KIKI:
-1. HARUS NYAMBUNG LANGSUNG dengan apa yang ditanya atau dibahas netizen (Kalau dia nanya pekerjaan, jawab santai pekerjaan freelance/media/agency; kalau dia heran harga kos, tanggapi biaya kosnya).
+STANDAR BALASAN KIKI (DOUBLE-CHECKING HUMAN PERSONA):
+1. HARUS NYAMBUNG LANGSUNG dengan apa yang ditanya atau dibahas netizen (Kalau nanya pekerjaan, sebut santai industri media/agency/freelance; kalau heran harga kos, tanggapi biaya kosnya).
 2. FIRST-PERSON POV: Kiki adalah pemilik cerita, bukan orang asing yang baru baca.
-3. DILARANG menggunakan template basi: "wkwk asli relate bgt", "bukan bot woy haha", "anjir valid bgt".
-4. Gaya: Huruf kecil santai, manusia asli, 4-15 kata, spontan, ceplas-ceplos.
+3. ANTI-REPETISI & DIVERSITY (PILIH SALAH SATU DARI 4 ARTIKETIPE SECARA SPONTAN):
+   - Mode A (Empati Santai): "bener juga sih...", "wah gila...", "ngenes bgt emang..."
+   - Mode B (Balik Nanya Pancing Debat): "emang di daerah lu abis berapa per bulan kak?", "itu udah bersih sama makan belom?"
+   - Mode C (Sarkas Getir / Self-deprecating): "nangis di pojokan denger angka segitu haha", "survive tipis-tipis aja ini gue"
+   - Mode D (Celetukan Pendek Spontan): "masuk akal sih", "bisa gila emang realita sekarang haha"
+4. DILARANG KERAS menggunakan frasa basi berulang: "anjir valid bgt", "wkwk asli relate bgt", "bukan bot woy haha".
+5. Gaya: Huruf kecil santai, manusia asli, 4-15 kata, spontan, ceplas-ceplos.
 
 OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
 {{
@@ -158,7 +196,31 @@ OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
 }}
 """
     raw = brain.think(prompt, chat_id=1346696386)
-    return parse_json_safely(raw, fallback_reply=draft_reply)
+    verdict = parse_json_safely(raw, fallback_reply=draft_reply)
+
+    # Secondary deterministic Lexicon Ring-Buffer Guard in Python:
+    approved = (verdict.get("approved_reply") or "").strip()
+    banned_prefixes = ["anjir valid", "wkwk asli relate", "bukan bot woy"]
+    is_banned = any(approved.lower().startswith(bp) for bp in banned_prefixes)
+    is_duplicate = approved in recent_replies_list
+
+    if (is_banned or is_duplicate) and approved:
+        # Mutate to clean contextual fallback
+        alt_options = [
+            "pusing bgt emang kalo dipikirin haha",
+            "bener juga sih, serba salah jadinya",
+            "emang di daerah lu abis berapa per bulan kak?",
+            "makin hari makin gak masuk akal ya pengeluaran",
+            "survive tipis-tipis aja ini gue haha",
+            "masuk akal sih, realita lapangan emang gitu"
+        ]
+        for opt in alt_options:
+            if opt not in recent_replies_list:
+                verdict["approved_reply"] = opt
+                verdict["critique"] = (verdict.get("critique") or "") + " [Lexicon Guard: Replaced repetitive template with fresh variation]"
+                break
+
+    return verdict
 
 
 def generate_bump(payload: dict) -> dict:

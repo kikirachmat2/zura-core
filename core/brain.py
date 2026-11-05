@@ -153,7 +153,7 @@ class ZuraBrain:
         }
 
         # Try primary model then fallback models
-        models_to_try = [self.gemini_model, "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview", "gemma-4-26b-a4b-it"]
+        models_to_try = [self.gemini_model, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite"]
         # Remove duplicates while preserving order
         seen = set()
         models = [m for m in models_to_try if not (m in seen or seen.add(m))]
@@ -161,7 +161,7 @@ class ZuraBrain:
         for m in models:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={self.gemini_key}"
             try:
-                resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=12)
+                resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=5.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     candidates = data.get("candidates", [])

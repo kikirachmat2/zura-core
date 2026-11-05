@@ -298,6 +298,142 @@ class ThreadsGovernor:
             logger.error(f"Error auditing Threads audience sentiment: {e}")
             return {"status": "ERROR", "error": str(e), "anger_ratio_pct": 0.0, "total_scanned": 0}
 
+    def get_top_viral_exemplars(self, limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Extracts top-performing viral posts from kisahkomisi.db as few-shot anchors.
+        Used by Zura to guide the creator persona into matching the cadence of proven viral hits.
+        """
+        if not self.is_connected():
+            return []
+
+        exemplars = []
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=5) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                
+                # Check if post_snapshots table exists
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='post_snapshots'")
+                has_snapshots = bool(cur.fetchone())
+
+                if has_snapshots:
+                    cur.execute("""
+                        SELECT s.id, s.title, s.topic, s.slides_json, MAX(p.views) as max_views, MAX(p.likes) as max_likes
+                        FROM stories s
+                        JOIN post_snapshots p ON s.id = p.story_id
+                        GROUP BY s.id
+                        HAVING max_views > 500
+                        ORDER BY max_views DESC
+                        LIMIT ?
+                    """, (limit,))
+                else:
+                    cur.execute("""
+                        SELECT id, title, topic, slides_json, 1000 as max_views, 50 as max_likes
+                        FROM stories
+                        WHERE status = 'published' AND qc_score >= 8.5
+                        ORDER BY id DESC
+                        LIMIT ?
+                    """, (limit,))
+
+                rows = cur.fetchall()
+                for r in rows:
+                    slides = []
+                    try:
+                        slides = json.loads(r["slides_json"]) if r["slides_json"] else []
+                    except Exception:
+                        pass
+                    exemplars.append({
+                        "id": r["id"],
+                        "title": r["title"],
+                        "topic": r["topic"],
+                        "max_views": r["max_views"],
+                        "max_likes": r["max_likes"],
+                        "first_slide": slides[0] if slides else "",
+                        "last_slide": slides[-1] if len(slides) > 1 else "",
+                        "all_slides": slides
+                    })
+        except Exception as e:
+            logger.warning(f"Could not retrieve viral exemplars from DB: {e}")
+
+        return exemplars
+
+    def get_recent_stories(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Extracts recent published and queued stories from kisahkomisi.db.
+        Used by Zura's anti-repetition engine to block duplicated angles, salary figures, and topics.
+        """
+        if not self.is_connected():
+            return []
+
+        recent = []
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=5) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT id, title, topic, slides_json, status, published_at, qc_score, format_type
+                    FROM stories
+                    ORDER BY id DESC
+                    LIMIT ?
+                """, (limit,))
+                for r in cur.fetchall():
+                    slides = []
+                    try:
+                        slides = json.loads(r["slides_json"]) if r["slides_json"] else []
+                    except Exception:
+                        pass
+                    recent.append({
+                        "id": r["id"],
+                        "title": r["title"],
+                        "topic": r["topic"],
+                        "status": r["status"],
+                        "published_at": r["published_at"],
+                        "qc_score": r["qc_score"],
+                        "format_type": r["format_type"] if "format_type" in r.keys() else "story",
+                        "first_slide": slides[0] if slides else "",
+                        "full_text": "\n".join(slides)
+                    })
+        except Exception as e:
+            logger.warning(f"Could not retrieve recent stories from DB: {e}")
+
+        return recent
+
+    def get_recent_auto_replies(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Extracts recent auto-replies to enforce the anti-repetition lexicon buffer.
+        Guarantees that repeated phrases (e.g. 'anjir valid bgt') are strictly eliminated.
+        """
+        if not self.is_connected():
+            return []
+
+        replies = []
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=5) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_replies'")
+                if not cur.fetchone():
+                    return []
+
+                cur.execute("""
+                    SELECT id, author_username, comment_text, reply_text, created_at
+                    FROM auto_replies
+                    ORDER BY id DESC
+                    LIMIT ?
+                """, (limit,))
+                for r in cur.fetchall():
+                    replies.append({
+                        "id": r["id"],
+                        "commenter": r["author_username"],
+                        "comment": r["comment_text"],
+                        "reply": r["reply_text"],
+                        "created_at": r["created_at"]
+                    })
+        except Exception as e:
+            logger.warning(f"Could not retrieve recent auto-replies from DB: {e}")
+
+        return replies
+
     def critique_story(self, slides: List[str], product_name: str, category: str) -> Dict[str, Any]:
         """
         Layer 2: AI & Heuristic Quality Controller for Threads stories.

@@ -226,3 +226,4 @@ class ShopeeCurator:
             return ""
         sep = "&" if "?" in base_url else "?"
         return f"{base_url}{sep}sub_id={sub_id}"
+

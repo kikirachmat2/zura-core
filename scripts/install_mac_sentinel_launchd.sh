@@ -39,6 +39,13 @@ cat <<EOF > "$PLIST_PATH"
     <string>$LOG_DIR/mac_sentinel.out.log</string>
     <key>StandardErrorPath</key>
     <string>$LOG_DIR/mac_sentinel.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
 </dict>
 </plist>
 EOF
@@ -47,3 +54,4 @@ chmod 644 "$PLIST_PATH"
 echo "✅ Installed Mac Sentinel LaunchAgent at $PLIST_PATH"
 echo "To load/activate: launchctl load -w $PLIST_PATH"
 echo "To unload: launchctl unload $PLIST_PATH"
+
