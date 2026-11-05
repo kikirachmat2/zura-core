@@ -33,7 +33,13 @@ def run_preflight_checks() -> bool:
 
     # 2. Check for private keys in tracked repo
     print("  ✓ Scanning codebase for exposed private key markers...")
-    res = subprocess.run(["git", "grep", "-i", "BEGIN .* PRIVATE KEY"], cwd=str(BASE_DIR), capture_output=True, text=True)
+    key_pattern = "----" + "-BEGIN [A-Z ]*PRIVATE KEY-----"
+    res = subprocess.run(
+        ["git", "grep", "-i", "-E", key_pattern, "--", ":!scripts/package_production_bundle.py"],
+        cwd=str(BASE_DIR),
+        capture_output=True,
+        text=True
+    )
     if res.returncode == 0 and res.stdout.strip():
         print(f"  ❌ CRITICAL: Private key detected in repo:\n{res.stdout}")
         return False
