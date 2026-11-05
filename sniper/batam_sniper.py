@@ -11,6 +11,40 @@ import json
 import logging
 import requests
 from datetime import datetime, time as dtime
+from pathlib import Path
+
+# Load environment variables from candidate locations
+try:
+    from dotenv import load_dotenv
+    for env_candidate in [
+        Path("/home/ubuntu/zura-core/.env"),
+        Path("/home/ubuntu/zura-sniper/.env"),
+        Path.home() / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+        Path(".env")
+    ]:
+        if env_candidate.exists():
+            load_dotenv(env_candidate)
+except ImportError:
+    # Manual parser if python-dotenv is not installed
+    for env_candidate in [
+        Path("/home/ubuntu/zura-core/.env"),
+        Path("/home/ubuntu/zura-sniper/.env"),
+        Path(__file__).resolve().parent.parent / ".env",
+        Path(".env")
+    ]:
+        if env_candidate.exists():
+            try:
+                with open(env_candidate, "r") as ef:
+                    for line in ef:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip('"').strip("'")
+                            if k not in os.environ:
+                                os.environ[k] = v
+            except Exception:
+                pass
 
 # Configure logging
 logging.basicConfig(
@@ -26,11 +60,23 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Target Configurations
-COMPARTMENT_ID = os.getenv("OCI_BATAM_COMPARTMENT", "")
-AVAILABILITY_DOMAIN = os.getenv("OCI_BATAM_AD", "")
-SUBNET_ID = os.getenv("OCI_BATAM_SUBNET", "")
-IMAGE_ID = os.getenv("OCI_BATAM_IMAGE", "")
+COMPARTMENT_ID = os.getenv("OCI_BATAM_COMPARTMENT", "ocid1.tenancy.oc1..aaaaaaaaek3bd3hfgtqqghqhxnxbewdnulkbmvuzd53adononnor33c44p5q")
+AVAILABILITY_DOMAIN = os.getenv("OCI_BATAM_AD", "tIse:AP-BATAM-1-AD-1")
+SUBNET_ID = os.getenv("OCI_BATAM_SUBNET", "ocid1.subnet.oc1.ap-batam-1.aaaaaaaaftmgyr6xkep6yl2snso6yjasoi3m2a77s2kbdrsndebqujfays7q")
+IMAGE_ID = os.getenv("OCI_BATAM_IMAGE", "ocid1.image.oc1.ap-batam-1.aaaaaaaapeavfbdxgxzn2nvvjlmvbr2pxan2tf5jurb734jau7o2d4n7tuuq")
+
+# Resolve SSH authorized key
 SSH_KEY = os.getenv("OCI_SSH_AUTHORIZED_KEY", "")
+if not SSH_KEY:
+    for key_path in [Path.home() / ".ssh/id_rsa.pub", Path.home() / ".ssh/id_ed25519.pub", Path.home() / ".ssh/authorized_keys"]:
+        if key_path.exists():
+            try:
+                SSH_KEY = key_path.read_text().strip().splitlines()[0]
+                break
+            except Exception:
+                pass
+if not SSH_KEY:
+    SSH_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXm/CsEpcLiSl3x5sZsgrJge5ZbKfySAvaMVrFHmc5M kiki@Fikris-MacBook-Pro.local"
 
 # Hunting Tiers - Prioritize 1 OCPU / 6GB and 2 OCPU / 12GB to stay within Free Tier regional limits
 TIERS = [
@@ -117,19 +163,20 @@ def run_sniper():
                 break
 
         except oci.exceptions.ServiceError as e:
-            if e.status == 429:
-                logging.warning(f"⚠️ RATE LIMIT 429 from Oracle API. Cooling down for 90s...")
+            if e.status == 429 or e.code == "TooManyRequests":
+                logging.warning("⚠️ RATE LIMIT 429 from Oracle API. Cooling down for 90s...")
                 time.sleep(90)
-            elif "LimitExceeded" in str(e.message):
-                logging.warning(f"⚠️ LimitExceeded on {tier['name']}. Switching tier immediately...")
+            elif "LimitExceeded" in str(e.code) or "limit" in str(e.message).lower() or "LimitExceeded" in str(e.message):
+                logging.warning(f"⚠️ LimitExceeded ({e.code}) on {tier['name']}. Cycling to next tier immediately...")
                 tier_idx = (tier_idx + 1) % len(TIERS)
+                logging.info(f"🔄 Next target tier: {TIERS[tier_idx]['name']}")
                 time.sleep(45)
-            elif "Out of host capacity" in str(e.message):
+            elif "Out of host capacity" in str(e.message) or "out of capacity" in str(e.message).lower():
                 consecutive_out_of_capacity += 1
                 logging.info(f"❌ OUT OF CAPACITY on {tier['name']} (streak: {consecutive_out_of_capacity})")
                 
-                # Dynamic Tier Cycling: Switch tier if stuck
-                if consecutive_out_of_capacity % 4 == 0:
+                # Dynamic Tier Cycling: Switch tier every 3 attempts if out of capacity
+                if consecutive_out_of_capacity % 3 == 0:
                     tier_idx = (tier_idx + 1) % len(TIERS)
                     logging.info(f"🔄 Cycling target tier to {TIERS[tier_idx]['name']}...")
                 
@@ -138,6 +185,7 @@ def run_sniper():
                 time.sleep(jitter)
             else:
                 logging.error(f"❓ OCI Error ({e.status}): {e.code} - {e.message}")
+                tier_idx = (tier_idx + 1) % len(TIERS)
                 time.sleep(60)
 
         except Exception as e:
