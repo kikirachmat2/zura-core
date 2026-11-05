@@ -318,17 +318,17 @@ class ZuraOrchestrator:
         await self.answer_callback_query(session, query_id)
 
         if data == "cb_evolve":
-            report = evolution_engine.run_full_evolution_cycle()
+            report = await asyncio.to_thread(evolution_engine.run_full_evolution_cycle)
             await self.send_text(session, chat_id, report, reply_markup=get_executive_menu_markup())
         elif data == "cb_cuan":
-            msg = finance_tracker.generate_wealth_acceleration_briefing()
+            msg = await asyncio.to_thread(finance_tracker.generate_wealth_acceleration_briefing)
             await self.send_text(session, chat_id, msg, reply_markup=get_executive_menu_markup())
         elif data == "cb_threads":
-            msg = threads_governor.generate_executive_threads_report()
+            msg = await asyncio.to_thread(threads_governor.generate_executive_threads_report)
             btn = {"inline_keyboard": [[{"text": "🚀 Auto-Generate 1 Story Sekarang", "callback_data": "cb_replenish"}]]}
             await self.send_text(session, chat_id, msg, reply_markup=btn)
         elif data == "cb_kibot":
-            k = kibot_controller.get_kibot_metrics()
+            k = await asyncio.to_thread(kibot_controller.get_kibot_metrics)
             k_msg = (
                 f"📈 <b>STATUS KIBOT V3 INDODAX (DCA 70/30):</b>\n"
                 f"• <b>Strategi:</b> <code>{k.get('strategy', 'ACCUMULATE_70_30')}</code>\n"
@@ -349,16 +349,16 @@ class ZuraOrchestrator:
             await self.send_text(session, chat_id, summary, reply_markup=get_executive_menu_markup())
         elif data == "cb_replenish":
             await self.send_text(session, chat_id, "⚙️ <i>Zura lagi riset produk Shopee komisi tertinggi & merangkai cerita viral...</i>")
-            res = threads_governor.replenish_story_queue()
+            res = await asyncio.to_thread(threads_governor.replenish_story_queue)
             if res.get("success"):
                 await self.send_text(session, chat_id, f"✅ <b>Sukses Queued Story #{res['story_id']}!</b>\n\n📖 <b>Judul:</b> {res['title']}\n🛍️ <b>Produk Shopee:</b> {res['product']}\n\n<i>Siap di-publish otomatis oleh worker bot lu, Bos!</i>", reply_markup=get_executive_menu_markup())
             else:
                 await self.send_text(session, chat_id, f"⚠️ Gagal replenish: {res.get('error')}")
         elif data == "cb_status":
-            report = decision_engine.generate_executive_digest("Live Fleet Check")
+            report = await asyncio.to_thread(decision_engine.generate_executive_digest, "Live Fleet Check")
             await self.send_text(session, chat_id, report, reply_markup=get_executive_menu_markup())
         elif data == "cb_clean":
-            freed = mac_sentinel.silent_cache_vacuum(force=True)
+            freed = await asyncio.to_thread(mac_sentinel.silent_cache_vacuum, force=True)
             await self.send_text(session, chat_id, f"🧹 Kuras Cache Berhasil! {freed} MB dibebaskan dari Mac lu.", reply_markup=get_executive_menu_markup())
         elif data.startswith("gitops_apply:"):
             target_sha = data.split(":", 1)[1]
@@ -392,7 +392,7 @@ class ZuraOrchestrator:
             await self.send_text(session, chat_id, resume_msg, reply_markup=get_executive_menu_markup())
         elif data.startswith("act_appr:"):
             action_id = data.split(":", 1)[1]
-            res = execute_approved_action(action_id, user_id)
+            res = await asyncio.to_thread(execute_approved_action, action_id, user_id)
             if res.get("success"):
                 appr_msg = (
                     f"✅ <b>AKSI L3 DISETUJUI & DIEKSEKUSI!</b>\n\n"
@@ -575,7 +575,7 @@ class ZuraOrchestrator:
             if not url.startswith("http"):
                 url = "https://" + url
             await self.send_text(session, chat_id, f"🌐 <i>Zura lagi buka dan bedah isi web: {url}...</i>")
-            page_data = web_agent.fetch_and_clean_markdown(url)
+            page_data = await asyncio.to_thread(web_agent.fetch_and_clean_markdown, url)
             if page_data.get("success"):
                 brief = (
                     f"🌐 <b>WEB HANDOFF BERHASIL:</b>\n"
@@ -596,7 +596,7 @@ class ZuraOrchestrator:
                 await self.send_text(session, chat_id, "Ketik: <code>/search [kata kunci]</code>")
                 return
             await self.send_text(session, chat_id, f"🔍 <i>Zura lagi riset web otonom untuk: '{query}'...</i>")
-            research_res = web_agent.research_topic(query)
+            research_res = await asyncio.to_thread(web_agent.research_topic, query)
             await self.send_text(session, chat_id, research_res)
             return
 
@@ -606,7 +606,7 @@ class ZuraOrchestrator:
         live_servers = get_state("servers_telemetry", [])
         extra_ctx = f"Mac: {live_mac}\nServers: {live_servers}"
 
-        reply = brain.think(text, chat_id=chat_id, extra_context=extra_ctx)
+        reply = await asyncio.to_thread(brain.think, text, chat_id=chat_id, extra_context=extra_ctx)
 
         # Output: Text or Voice Note
         if reply_as_voice:
@@ -648,23 +648,23 @@ class ZuraOrchestrator:
                     import time as _t
                     set_state("last_ans_heartbeat", str(_t.time()))
 
-                    # 1. Mac Care (Every 60s)
-                    mac_sentinel.run_autonomic_cycle()
+                    # 1. Mac Care (Every 60s) - Offloaded to thread
+                    await asyncio.to_thread(mac_sentinel.run_autonomic_cycle)
 
-                    # 2. Network Check (Every 60s)
-                    wifi_watchdog.auto_heal_network()
+                    # 2. Network Check (Every 60s) - Offloaded to thread
+                    await asyncio.to_thread(wifi_watchdog.auto_heal_network)
 
-                    # 3. Server Multi-Node Health Audit (Every 180s)
+                    # 3. Server Multi-Node Health Audit (Every 180s) - Offloaded to thread
                     if cycle_count % 3 == 0:
-                        server_watchdog.probe_all_servers()
+                        await asyncio.to_thread(server_watchdog.probe_all_servers)
 
                     # Charter v2 (0.5b): Record verified boot marker after first full ANS cycle completes
                     if cycle_count == 1:
-                        self.record_boot_marker()
+                        await asyncio.to_thread(self.record_boot_marker)
 
                     # 4. GitOps Update Check (L3 Guardrail: Notification with inline approval button only)
                     if cycle_count % 10 == 0:
-                        check = gitops_watcher.check_for_updates()
+                        check = await asyncio.to_thread(gitops_watcher.check_for_updates)
                         if check.get("failed"):
                             err_msg = check.get("error", "Unknown git error")
                             last_err = get_state("last_gitops_error", "")
@@ -725,25 +725,25 @@ class ZuraOrchestrator:
                     current_minute = now_wib.minute
                     if current_hour in [8, 20] and current_hour != self.last_briefing_hour and current_minute <= 5:
                         label = "Pagi (08:00 WIB)" if current_hour == 8 else "Malam (20:00 WIB)"
-                        digest = decision_engine.generate_executive_digest(label)
+                        digest = await asyncio.to_thread(decision_engine.generate_executive_digest, label)
                         voice_file = await synthesize_voice_async(digest[:500])
                         await self.send_voice(session, self.authorized_chat_id, voice_file, caption=digest[:1024])
                         self.last_briefing_hour = current_hour
 
                     # 5. Periodic voice cache cleanup
                     if cycle_count % 30 == 0:
-                        cleanup_temp_voice()
+                        await asyncio.to_thread(cleanup_temp_voice)
 
-                    # 6. Production Systems Takeover & Auto-Replenish (Every 180s)
+                    # 6. Production Systems Takeover & Auto-Replenish (Every 180s) - Offloaded to thread
                     if cycle_count % 3 == 0:
-                        kibot_controller.get_kibot_metrics()
-                        threads_actions = threads_governor.evaluate_and_govern()
+                        await asyncio.to_thread(kibot_controller.get_kibot_metrics)
+                        threads_actions = await asyncio.to_thread(threads_governor.evaluate_and_govern)
                         if threads_actions:
                             logger.info(f"🧵 Threads Governor Actions: {threads_actions}")
 
-                    # 7. Full Autonomous Evolution & Production Governance (Every 600s / 10 mins)
+                    # 7. Full Autonomous Evolution & Production Governance (Every 600s / 10 mins) - Offloaded to thread
                     if cycle_count % 10 == 0:
-                        evolution_engine.audit_and_govern_production()
+                        await asyncio.to_thread(evolution_engine.audit_and_govern_production)
 
                 except Exception as e:
                     logger.error(f"ANS loop exception: {e}")

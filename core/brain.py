@@ -99,7 +99,7 @@ class ZuraBrain:
             messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": prompt})
 
-        for model in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+        for model in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
             payload = {
                 "model": model,
                 "messages": messages,
@@ -145,7 +145,7 @@ class ZuraBrain:
         }
 
         # Try primary model then fallback models
-        models_to_try = [self.gemini_model, "gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3-flash-preview"]
+        models_to_try = [self.gemini_model, "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview", "gemma-4-26b-a4b-it"]
         # Remove duplicates while preserving order
         seen = set()
         models = [m for m in models_to_try if not (m in seen or seen.add(m))]

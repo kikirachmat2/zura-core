@@ -21,6 +21,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from core.memory import log_decision, set_state
 from core.actuator import actuate, ActuatorError
+from ops.reality_verifier import audit_story_content
 import core.config as config
 
 logger = logging.getLogger("ThreadsGovernor")
@@ -226,6 +227,12 @@ class ThreadsGovernor:
         if product_name and product_name.lower() not in text_all and not any(w in text_all for w in product_name.lower().split()[:2]):
             score -= 15
             notes.append("Product context is weakly anchored in the narrative")
+
+        # Check 4: Deterministic Reality & Math Truth Verification
+        truth_audit = audit_story_content({"slides": slides, "topic": product_name, "category": category})
+        if not truth_audit["is_approved"]:
+            score -= 30
+            notes.extend(truth_audit["logic_flaws"])
 
         passed = score >= 70
         return {

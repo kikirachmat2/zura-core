@@ -16,6 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from core.brain import brain
+from ops.reality_verifier import audit_story_content, audit_financial_math
 
 logging.basicConfig(level=logging.ERROR)
 
@@ -29,6 +30,17 @@ def review_story(payload: dict) -> dict:
 
     slides_text = "\n".join([f"Slide {i+1}: {s}" for i, s in enumerate(slides)])
 
+    # 1. Deterministic Math & Reality Truth Audit
+    audit = audit_story_content(payload)
+    detected_flaws = audit.get("logic_flaws", [])
+    flaws_prompt_inject = ""
+    if detected_flaws:
+        flaws_prompt_inject = (
+            "\n[HASIL AUDIT MATEMATIKA & GEOGRAFI REALISTIS ZURA - WAJIB DIPERBAIKI]:\n"
+            + "\n".join([f"- {f}" for f in detected_flaws])
+            + "\nPERINGATAN: Zura WAJIB merombak total angka-angka atau detail geografi di atas pada 'revised_slides' agar 100% lolos audit @meta.ai dan tidak dirujak warganet!\n"
+        )
+
     prompt = f"""
 [ZURA EDITORIAL GATEKEEPER - MANDATORY STORY QC & REWRITE]
 Lu adalah Zura, COO & Pemimpin Redaksi eksekutif akun Threads @kikipunyacerita.
@@ -36,8 +48,8 @@ Bos Kiki marah besar karena konten sebelumnya kelihatan tolol, gak mikir, dan ka
 - Masa ngekos di Surabaya dibilang naik KRL (Surabaya gak ada KRL!).
 - Masa udah bayar sewa kontrakan tapi nyicil KPR barengan tanpa konteks logis.
 - Masa cerita kebocoran rahasia negara diselingi sabun cuci muka tiba-tiba.
-- Angka-angka kaku dipaksakan kayak template laporan kantor.
-
+- Angka-angka kaku dipaksakan kayak template laporan kantor, dan kalau dijumlahkan malah tekor atau gak balance!
+{flaws_prompt_inject}
 TUGAS LU: Evaluasi draft di bawah ini dengan standar tajam, logis, dan 100% manusiawi warganet Threads.
 
 DATA DRAFT KONTEN:
@@ -50,23 +62,37 @@ DATA DRAFT KONTEN:
 {slides_text}
 
 KRITERIA PENILAIAN ZURA:
-1. Logika & Kewarasan Konteks: Apakah ada keanehan/plot-hole? (Transportasi gak sesuai kota, dobel biaya konyol, alur gak masuk akal).
-2. Deteksi AI / Kelihatan Robot: Apakah gaya tulisannya mengalir natural seperti manusia asli curhat di Threads (lowercase santai, berantakan emosional) ATAU masih kaku kayak template bullet-point AI?
-3. Penempatan Affiliate (jika ada): Apakah produk menjadi problem solver langsung dari masalah yang dibahas, atau selingan mendadak yang kaku? DILARANG ADA FRASA IKLAN CANGGUNG seperti 'selingan dikit' atau 'btw kemarin gue checkout'!
-4. Ending Dilema Polarisasi Ekstrem (Polarizing Dilemma): Apakah slide terakhir memicu perdebatan sengit dua kubu? Jika masih berupa pertanyaan hambar ('kalian tim mana?', 'spill dong'), ZURA WAJIB merombaknya menjadi dilema ekstrem yang memaksa netizen memihak dan berdebat di komentar!
+1. Logika & Kewarasan Konteks & Matematika:
+   - Jika ada rincian alokasi gaji / budget, TOTAL SEMUA PENGELUARAN + TABUNGAN WAJIB 100% SAMA DENGAN GAJI YANG DIKLAIM (Anti-Audit Meta AI).
+   - Transportasi wajib sesuai kota (KRL/MRT/LRT hanya di Jabodetabek & Yogya-Solo).
+2. Deteksi AI / Kelihatan Robot: Gaya mengalir natural seperti manusia asli curhat di Threads (lowercase santai, berantakan emosional), bukan kaku template bullet-point AI.
+3. Penempatan Affiliate (jika ada): Produk harus menjadi problem solver alami dari masalah yang dibahas, bukan selingan mendadak. DILARANG ADA FRASA IKLAN CANGGUNG ('selingan dikit', 'btw kemarin gue checkout').
+4. Ending Dilema Polarisasi Ekstrem: Slide terakhir memicu perdebatan sengit dua kubu yang memaksa netizen memihak dan berkomentar tanpa toxic hate-speech.
 
 OUTPUT WAJIB FORMAT JSON (HANYA JSON VALID, TANPA TEKS LAIN):
 {{
   "is_approved": true/false,
-  "logic_flaws": ["daftar keanehan jika ada"],
+  "logic_flaws": ["daftar keanehan atau salah hitung jika ada"],
   "critique": "Kritik pedas/catatan Zura terhadap draft ini",
   "revised_slides": ["Slide 1 revisi Zura", "Slide 2 revisi Zura", "Slide 3 revisi Zura", "Slide 4 revisi Zura"],
   "recommended_action": "APPROVE" / "USE_REVISED" / "REJECT"
 }}
-Catatan: Jika draft ada cacat logika atau masih terasa kaku AI, Zura WAJIB menuliskan "revised_slides" versi sempurna yang 100% manusiawi, luwes, masuk akal, dan siap publish!
+Catatan: Jika draft ada cacat logika/hitung atau terasa kaku AI, Zura WAJIB menuliskan "revised_slides" versi sempurna yang 100% manusiawi, luwes, masuk akal, hitungan matematis akurat, dan siap publish!
 """
     raw = brain.think(prompt, chat_id=1346696386)
-    return parse_json_safely(raw, fallback_slides=slides)
+    verdict = parse_json_safely(raw, fallback_slides=slides)
+
+    # Merge deterministic flaws with LLM critique
+    if detected_flaws:
+        existing_flaws = verdict.get("logic_flaws") or []
+        for f in detected_flaws:
+            if f not in existing_flaws:
+                existing_flaws.append(f)
+        verdict["logic_flaws"] = existing_flaws
+        verdict["is_approved"] = False
+        verdict["recommended_action"] = "USE_REVISED"
+
+    return verdict
 
 
 def review_reply(payload: dict) -> dict:
