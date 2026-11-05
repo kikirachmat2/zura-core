@@ -34,10 +34,16 @@ class WhatIfContingencyEngine:
         self.scenarios_registry = {
             "KIBOT_NONCE_DESYNC": self.handle_kibot_nonce_desync,
             "KIBOT_API_TIMEOUT": self.handle_kibot_api_timeout,
+            "KIBOT_FLASH_CRASH_PANIC": self.handle_kibot_flash_crash,
             "THREADS_META_429": self.handle_threads_meta_429,
+            "THREADS_SHADOWBAN_SUSPECTED": self.handle_threads_shadowban,
+            "SHOPEE_LINK_DEAD": self.handle_shopee_link_dead,
             "SERVER_DISK_EXHAUSTION": self.handle_server_disk_exhaustion,
             "SERVER_RAM_SPIKE": self.handle_server_ram_spike,
+            "OCI_IDLE_RECLAIM_RISK": self.handle_oci_idle_reclaim_risk,
             "MAC_THERMAL_THROTTLING": self.handle_mac_thermal_throttling,
+            "POCO_BATTERY_OVERHEAT": self.handle_poco_battery_overheat,
+            "ANDROID_CABLE_DISCONNECTED": self.handle_android_cable_disconnected,
             "WIFI_MEETING_ACTIVE": self.handle_wifi_meeting_active,
             "GITOPS_BROKEN_SYNTAX": self.handle_gitops_broken_syntax,
             "STORY_MATH_MISMATCH": self.handle_story_math_mismatch,
@@ -274,6 +280,129 @@ class WhatIfContingencyEngine:
             "requires_human_approval": False,
             "contingency_tier": "L1",
             "rollback_plan": "Drop untrusted payload completely."
+        }
+
+    # =========================================================================
+    # 5. EXPANDED NEW CONTINGENCIES (SHOPEE, THREADS VISION, MOBILE, KIBOT PANIC, OCI)
+    # =========================================================================
+    def handle_shopee_link_dead(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        What if Shopee affiliate product is delisted, 404, or out of stock?
+        """
+        return {
+            "scenario": "SHOPEE_LINK_DEAD",
+            "risk_level": "HIGH",
+            "what_if": "Shopee affiliate link returns 404 or page contains 'stok habis' / 'produk tidak ditemukan'.",
+            "autonomous_reflex": [
+                "1. ShopeeCurator detects invalid link / stockout before story is posted.",
+                "2. System automatically curates matching high-converting replacement from shopee_latest.csv.",
+                "3. Append tracking tag (sub_id=kikipunyacerita) to new URL.",
+                "4. Update story row in kisahkomisi.db with healed product_name and product_url.",
+                "5. Post goes live with active in-stock link; zero lost commission revenue."
+            ],
+            "requires_human_approval": False,
+            "contingency_tier": "L1",
+            "rollback_plan": "Revert to evergreen universal catalog link if replacement fails."
+        }
+
+    def handle_threads_shadowban(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        What if Meta shadowbans Threads profile or returns Page Not Found publicly?
+        """
+        return {
+            "scenario": "THREADS_SHADOWBAN_SUSPECTED",
+            "risk_level": "CRITICAL",
+            "what_if": "Public HTTP request to threads.net/@kikipunyacerita returns 404 or 'Halaman Tidak Tersedia'.",
+            "autonomous_reflex": [
+                "1. Web Vision detects profile unavailability without auth session.",
+                "2. Immediately PAUSE public posting queue to prevent triggering further algorithmic penalties.",
+                "3. Switch Kisah Komisi engine to DRAFT_ONLY mode.",
+                "4. Send high-priority alert to Bos Kiki Telegram: '🚨 Akun Threads @kikipunyacerita terindikasi shadowban/unreachable!'.",
+                "5. Wait for manual verification before resuming publication."
+            ],
+            "requires_human_approval": True,
+            "contingency_tier": "L3",
+            "rollback_plan": "Resume queue when public visibility check passes."
+        }
+
+    def handle_poco_battery_overheat(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        What if POCO M3 battery temperature breaches 40.0°C?
+        """
+        return {
+            "scenario": "POCO_BATTERY_OVERHEAT",
+            "risk_level": "CRITICAL",
+            "what_if": "POCO M3 battery temperature reaches or exceeds 40.0°C (swelling battery hazard).",
+            "autonomous_reflex": [
+                "1. MobileSentinel detects temp >= 40.0°C via dumpsys battery.",
+                "2. Instantly execute thermal protection: dim screen brightness to 10.",
+                "3. Kill background CPU-heavy apps via 'adb shell am kill-all'.",
+                "4. Dispatch emergency Telegram alarm: '🔥 SUHU POCO M3 40°C+: Cabut charger sekarang juga!'.",
+                "5. Log thermal mitigation decision to SQLite."
+            ],
+            "requires_human_approval": False,
+            "contingency_tier": "L2",
+            "rollback_plan": "Restore standard brightness once temp drops below 36.0°C."
+        }
+
+    def handle_android_cable_disconnected(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        What if physical USB cable to POCO M3 is unplugged?
+        """
+        return {
+            "scenario": "ANDROID_CABLE_DISCONNECTED",
+            "risk_level": "MEDIUM",
+            "what_if": "POCO M3 disappears from USB adb devices list.",
+            "autonomous_reflex": [
+                "1. Detect USB detach immediately.",
+                "2. Auto-switch to Wireless ADB: execute 'adb connect <POCO_IP>:5555'.",
+                "3. Verify device connection status via Wi-Fi network.",
+                "4. Maintain uninterrupted battery & telemetry polling.",
+                "5. Only report offline if both USB and Wireless fail after 3 retries."
+            ],
+            "requires_human_approval": False,
+            "contingency_tier": "L1",
+            "rollback_plan": "Retry wireless handshake every 60s until device re-enters subnet."
+        }
+
+    def handle_kibot_flash_crash(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        What if crypto market flash-crashes > 15% in < 15 mins?
+        """
+        return {
+            "scenario": "KIBOT_FLASH_CRASH_PANIC",
+            "risk_level": "CRITICAL",
+            "what_if": "BTC or ETH suffers catastrophic drop >15% in 15 mins or Indodax orderbook empties.",
+            "autonomous_reflex": [
+                "1. KiBotReconciler detects extreme volatility spread or ticker plunge.",
+                "2. Trigger instant Emergency Circuit Breaker: actuate('kibot_emergency_stop').",
+                "3. Stop kibot-v3-core.service immediately to preserve IDR cash buffer.",
+                "4. Record emergency halt state in SQLite system_state.",
+                "5. Send 1-tap Telegram alert with PnL summary and option to resume."
+            ],
+            "requires_human_approval": False,
+            "contingency_tier": "L2",
+            "rollback_plan": "Execute 'undo_action' or restart service via Telegram button after market stabilizes."
+        }
+
+    def handle_oci_idle_reclaim_risk(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        What if Oracle Cloud Infrastructure threatens to reclaim idle VM instance?
+        """
+        return {
+            "scenario": "OCI_IDLE_RECLAIM_RISK",
+            "risk_level": "HIGH",
+            "what_if": "Server 1 or Server 2 CPU utilization remains < 15% for multiple consecutive days.",
+            "autonomous_reflex": [
+                "1. ServerWatchdog schedules micro-pulse keepalive every 6 hours.",
+                "2. Execute 1.5-second controlled sha256 micro-benchmark pulse.",
+                "3. Register momentary >15% CPU load so Oracle OCI metrics classify VM as active.",
+                "4. Zero impact on running Zura, KiBot, or Kisah Komisi services.",
+                "5. Protect free-tier cloud servers from automated account reclamation."
+            ],
+            "requires_human_approval": False,
+            "contingency_tier": "L1",
+            "rollback_plan": "Log pulse metric to servers_telemetry."
         }
 
 

@@ -5,8 +5,12 @@ Transcribes voice notes and incoming audio with <300ms latency.
 
 import os
 import logging
-from groq import Groq
 from core.config import GROQ_API_KEY, STT_MODEL
+
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 
 logger = logging.getLogger("ZuraSTT")
 
@@ -14,7 +18,7 @@ logger = logging.getLogger("ZuraSTT")
 class ZuraSTT:
     def __init__(self):
         self.api_key = GROQ_API_KEY
-        self.client = Groq(api_key=self.api_key) if self.api_key else None
+        self.client = Groq(api_key=self.api_key) if (self.api_key and Groq is not None) else None
         self.model = STT_MODEL
 
     def transcribe(self, audio_file_path: str, language: str = "id") -> str:

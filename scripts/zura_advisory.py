@@ -17,6 +17,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from core.brain import brain
 from ops.reality_verifier import audit_story_content, audit_financial_math
+from ops.shopee_curator import ShopeeCurator
 
 logging.basicConfig(level=logging.ERROR)
 
@@ -27,6 +28,26 @@ def review_story(payload: dict) -> dict:
     product_url = payload.get("product_url", "")
     slides = payload.get("slides", [])
     city = payload.get("city", "")
+
+    # Autonomous Shopee Link & Stock Guardian
+    shopee_curator = ShopeeCurator()
+    healed_affiliate = None
+    if product_url:
+        link_audit = shopee_curator.validate_link(product_url)
+        if not link_audit.get("valid"):
+            replacement = shopee_curator.curate_replacement(exclude_urls=[product_url])
+            if replacement:
+                new_url = shopee_curator.format_affiliate_link(replacement["product_url"])
+                new_name = replacement["product_name"]
+                healed_affiliate = {
+                    "original_url": product_url,
+                    "original_product": product_name,
+                    "healed_url": new_url,
+                    "healed_product": new_name,
+                    "reason": link_audit.get("reason")
+                }
+                product_url = new_url
+                product_name = new_name
 
     slides_text = "\n".join([f"Slide {i+1}: {s}" for i, s in enumerate(slides)])
 
@@ -91,6 +112,11 @@ Catatan: Jika draft ada cacat logika/hitung atau terasa kaku AI, Zura WAJIB menu
         verdict["logic_flaws"] = existing_flaws
         verdict["is_approved"] = False
         verdict["recommended_action"] = "USE_REVISED"
+
+    if healed_affiliate:
+        verdict["healed_affiliate"] = healed_affiliate
+        verdict["product_name"] = product_name
+        verdict["product_url"] = product_url
 
     return verdict
 

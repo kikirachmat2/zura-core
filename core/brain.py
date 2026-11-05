@@ -4,9 +4,11 @@ Connects to Google Gemini 2.5 Flash with OpenRouter fallback.
 Employs Zura's young, witty, sharp, executive COO persona.
 """
 
+import os
 import json
 import logging
 import requests
+import psutil
 from typing import List, Dict, Any, Optional
 from core.config import GEMINI_API_KEY, GEMINI_MODEL, GROQ_API_KEY, OPENROUTER_API_KEY
 from core.memory import get_recent_chat, save_message, get_recent_decisions
@@ -45,6 +47,8 @@ class ZuraBrain:
         self.gemini_model = GEMINI_MODEL
         self.groq_key = GROQ_API_KEY
         self.openrouter_key = OPENROUTER_API_KEY
+        self.ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
 
     def think(self, user_prompt: str, chat_id: int = 0, extra_context: Optional[str] = None) -> str:
         """Processes input prompt and returns Zura's response."""
@@ -71,9 +75,13 @@ class ZuraBrain:
             logger.warning("Gemini API failed or timed out. Failing over to Groq LPU...")
             response_text = self._call_groq(user_prompt, history, full_system)
 
-        # Tier 3: OpenRouter
+        # Tier 3: Adaptive Local Ollama (Only if system RAM capacity allows >= 1.5GB)
         if not response_text:
-            logger.warning("Groq failed. Failing over to OpenRouter...")
+            response_text = self._call_ollama(user_prompt, history, full_system)
+
+        # Tier 4: OpenRouter
+        if not response_text:
+            logger.warning("Groq/Ollama failed. Failing over to OpenRouter...")
             response_text = self._call_openrouter(user_prompt, history, full_system)
 
         if not response_text:
@@ -167,6 +175,51 @@ class ZuraBrain:
                     logger.warning(f"Gemini model {m} returned {resp.status_code}: {resp.text[:100]}")
             except Exception as e:
                 logger.warning(f"Gemini call exception ({m}): {e}")
+
+        return None
+
+    def _call_ollama(self, prompt: str, history: List[Dict[str, str]], system_instruction: str) -> Optional[str]:
+        """
+        Adaptive local Ollama client:
+        - Evaluates system RAM before dispatching.
+        - Skips execution if available RAM < 1.5GB to avoid OOM-killing critical services on low-memory servers (e.g. Server 1 952MB RAM).
+        - Executes locally on capable machines (e.g. Mac 16GB RAM) via lightweight local models.
+        """
+        try:
+            mem = psutil.virtual_memory()
+            avail_mb = mem.available / (1024 * 1024)
+            if avail_mb < 1500.0:
+                logger.info(
+                    "Ollama local inference bypassed: available RAM (%.1f MB) < 1500 MB (avoiding Linux OOM crash).",
+                    avail_mb
+                )
+                return None
+
+            url = f"{self.ollama_host.rstrip('/')}/api/generate"
+            formatted_prompt = f"System: {system_instruction}\n\n"
+            for h in history:
+                formatted_prompt += f"{h['role'].capitalize()}: {h['content']}\n"
+            formatted_prompt += f"User: {prompt}\nAssistant:"
+
+            payload = {
+                "model": self.ollama_model,
+                "prompt": formatted_prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.8,
+                    "num_predict": 1024
+                }
+            }
+
+            resp = requests.post(url, json=payload, timeout=8.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                res_text = data.get("response", "").strip()
+                if res_text:
+                    logger.info("Ollama local inference succeeded using model '%s'", self.ollama_model)
+                    return res_text
+        except Exception as e:
+            logger.debug("Ollama local connection skipped or unreachable: %s", e)
 
         return None
 

@@ -6,9 +6,18 @@ Generates natural young female voice (id-ID-GadisNeural / en-US-JennyNeural) 100
 import os
 import time
 import asyncio
-import edge_tts
+import logging
 from pathlib import Path
 from core.config import VOICE_NAME_ID, VOICE_NAME_EN, TEMP_VOICE_DIR
+
+logger = logging.getLogger("ZuraTTS")
+
+try:
+    import edge_tts
+    HAS_EDGE_TTS = True
+except ImportError:
+    edge_tts = None
+    HAS_EDGE_TTS = False
 
 TEMP_VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -18,6 +27,9 @@ async def synthesize_voice_async(text: str, is_english: bool = False) -> str:
     Synthesizes text into high-quality neural voice.
     Returns the path to the generated audio file.
     """
+    if not HAS_EDGE_TTS or edge_tts is None:
+        raise RuntimeError("edge_tts is not installed in the current environment")
+
     voice = VOICE_NAME_EN if is_english else VOICE_NAME_ID
     filename = f"zura_voice_{int(time.time() * 1000)}.mp3"
     filepath = TEMP_VOICE_DIR / filename

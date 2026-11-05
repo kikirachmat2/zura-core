@@ -58,9 +58,13 @@ RATE_LIMITS: Dict[str, float] = {
     "server_restart_service": getattr(config, "RATE_LIMIT_SERVER_RESTART_SEC", 3600.0),
     "kibot_restart_service": getattr(config, "RATE_LIMIT_KIBOT_RESTART_SEC", 3600.0),
     "kibot_tune_env": getattr(config, "RATE_LIMIT_KIBOT_TUNE_SEC", 3600.0),
+    "kibot_emergency_stop": 30.0,
     "network_wifi_reconnect": getattr(config, "RATE_LIMIT_WIFI_RECONNECT_SEC", 300.0),
     "mac_purge_cache": getattr(config, "RATE_LIMIT_MAC_PURGE_CACHE_SEC", 600.0),
     "threads_replenish_queue": getattr(config, "RATE_LIMIT_THREADS_REPLENISH_SEC", 180.0),
+    "threads_heal_affiliate": 60.0,
+    "mobile_battery_guard": 60.0,
+    "server_vacuum_logs": 3600.0,
     "gitops_apply_update": 60.0,       # Cooldown 1 min between updates
 }
 
@@ -68,7 +72,9 @@ RATE_LIMITS: Dict[str, float] = {
 REVENUE_CRITICAL_ACTIONS: Set[str] = {
     "kibot_tune_env",
     "kibot_restart_service",
+    "kibot_emergency_stop",
     "threads_replenish_queue",
+    "threads_heal_affiliate",
 }
 
 # In-memory circuit breaker alert tracker: (action_name, host, service)

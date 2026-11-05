@@ -22,7 +22,9 @@ sys.path.insert(0, str(BASE_DIR))
 from core.memory import log_decision, set_state
 from core.actuator import actuate, ActuatorError
 from ops.reality_verifier import audit_story_content
+from ops.shopee_curator import ShopeeCurator
 import core.config as config
+import requests
 
 logger = logging.getLogger("ThreadsGovernor")
 
@@ -37,6 +39,127 @@ CANDIDATE_PATHS = [
 class ThreadsGovernor:
     def __init__(self):
         self.db_path = self._find_database()
+        self.shopee_curator = ShopeeCurator()
+
+    def inspect_threads_live_health(self, username: str = "kikipunyacerita", timeout: float = 6.0) -> Dict[str, Any]:
+        """
+        Active Web Vision: Verifies live visibility and status of Threads account.
+        Detects public reachability, shadowban indications, and HTTP errors.
+        """
+        target_url = f"https://www.threads.net/@{username.lstrip('@')}"
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
+        }
+
+        try:
+            resp = requests.get(target_url, headers=headers, timeout=timeout, allow_redirects=True)
+            status_code = resp.status_code
+            is_ok = (status_code == 200)
+
+            # Check for shadowban / profile missing signs in HTML
+            is_shadowbanned = False
+            if status_code in (404, 410):
+                is_shadowbanned = True
+            elif "Sorry, this page isn't available" in resp.text or "Halaman Tidak Tersedia" in resp.text:
+                is_shadowbanned = True
+
+            result = {
+                "accessible": is_ok and not is_shadowbanned,
+                "status_code": status_code,
+                "url": target_url,
+                "username": username,
+                "shadowban_suspected": is_shadowbanned,
+                "timestamp": datetime.now().isoformat()
+            }
+            set_state("threads_live_health", result)
+            return result
+        except requests.exceptions.Timeout:
+            return {
+                "accessible": False,
+                "status_code": 408,
+                "url": target_url,
+                "username": username,
+                "shadowban_suspected": False,
+                "error": f"Connection timed out after {timeout}s"
+            }
+        except Exception as e:
+            return {
+                "accessible": False,
+                "status_code": 0,
+                "url": target_url,
+                "username": username,
+                "shadowban_suspected": False,
+                "error": str(e)
+            }
+
+    def validate_and_heal_queue_affiliate_links(self) -> Dict[str, Any]:
+        """
+        Autonomous Shopee Health Guardian:
+        Scans all queued stories in kisahkomisi.db. If any affiliate link is dead (404, out of stock,
+        or redirects to generic homepage), curates a high-converting replacement and heals the row.
+        """
+        if not self.is_connected():
+            return {"healed_count": 0, "status": "DB_OFFLINE"}
+
+        healed = []
+        try:
+            conn = sqlite3.connect(str(self.db_path), timeout=5)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT id, topic, product_name, product_url, slides FROM stories WHERE status = 'queued'")
+            rows = cursor.fetchall()
+
+            for r in rows:
+                p_url = r["product_url"] or ""
+                p_name = r["product_name"] or ""
+
+                if not p_url:
+                    continue
+
+                check = self.shopee_curator.validate_link(p_url)
+                if not check.get("valid"):
+                    logger.warning(
+                        "Dead Shopee link detected in queued story #%s (%s): %s. Healing...",
+                        r["id"], p_name, check.get("reason")
+                    )
+                    replacement = self.shopee_curator.curate_replacement(exclude_urls=[p_url])
+                    if replacement:
+                        new_url = self.shopee_curator.format_affiliate_link(replacement["product_url"])
+                        new_name = replacement["product_name"]
+
+                        cursor.execute(
+                            "UPDATE stories SET product_name = ?, product_url = ? WHERE id = ?",
+                            (new_name, new_url, r["id"])
+                        )
+                        healed.append({
+                            "story_id": r["id"],
+                            "old_url": p_url,
+                            "new_url": new_url,
+                            "new_product": new_name,
+                            "reason": check.get("reason")
+                        })
+
+            conn.commit()
+            conn.close()
+
+            if healed:
+                log_decision(
+                    domain="threads_affiliate",
+                    trigger_event=f"Dead Shopee links detected ({len(healed)})",
+                    decision_taken=f"Auto-healed {len(healed)} dead Shopee link(s) in queue",
+                    outcome="SUCCESS"
+                )
+
+            return {"healed_count": len(healed), "details": healed}
+        except Exception as e:
+            logger.error("Error healing affiliate links: %s", e)
+            return {"healed_count": 0, "error": str(e)}
 
     def _find_database(self) -> Path:
         for p in CANDIDATE_PATHS:

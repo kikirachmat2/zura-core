@@ -216,7 +216,7 @@ class ServerWatchdog:
         if data.get("disk_used_pct", 0) > SERVER_DISK_MAX_PCT:
             logger.warning(f"⚠️ Disk usage breached {data['disk_used_pct']}% threshold. Routing vacuum through actuator...")
             def _do_vacuum(n=node):
-                vacuum_cmd = "sudo /usr/bin/journalctl --vacuum-size=150M"
+                vacuum_cmd = "sudo /usr/bin/journalctl --vacuum-size=100M --vacuum-time=3d; pm2 flush 2>/dev/null || true; sudo find /tmp -type f -atime +3 -delete 2>/dev/null || true"
                 rc, out = self._execute_command(n, vacuum_cmd, timeout=15)
                 if rc != 0:
                     raise RuntimeError(f"Vacuum failed: {out}")
@@ -242,6 +242,17 @@ class ServerWatchdog:
                 logger.warning(f"Actuator blocked vacuum: {ae}")
             except Exception as e:
                 logger.error(f"Vacuum error: {e}")
+
+    def oci_keepalive_pulse(self, node: dict) -> Dict[str, Any]:
+        """
+        Anti-Reclaim Pulse for Oracle Cloud Infrastructure (OCI):
+        OCI terminates Free Tier instances if CPU < 15% for 7 consecutive days.
+        This sends a controlled 1.5s micro-workload pulse (sha256 calculation)
+        that briefly registers CPU activity without starving services.
+        """
+        pulse_cmd = "python3 -c \"import hashlib, time; t=time.time(); [hashlib.sha256(b'oci_keepalive'*1000).hexdigest() for _ in range(500000) if time.time()-t < 1.5]\""
+        rc, out = self._execute_command(node, pulse_cmd, timeout=5)
+        return {"node": node.get("id"), "pulse_success": rc == 0}
 
     def probe_all_servers(self) -> List[Dict[str, Any]]:
         """Audits all configured server nodes and caches state."""

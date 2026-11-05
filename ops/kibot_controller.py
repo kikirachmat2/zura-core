@@ -222,6 +222,48 @@ class KiBotController:
             logger.error(f"Failed to tune KiBot: {e}")
             return {"success": False, "error": str(e)}
 
+    def emergency_stop(self, reason: str = "Circuit Breaker: Market anomaly or manual halt") -> Dict[str, Any]:
+        """
+        Instant Emergency Circuit Breaker:
+        Stops kibot-v3-core.service immediately to prevent unintended trades during black-swan events.
+        Reversible via Zura undo action.
+        """
+        def _do_stop():
+            set_state("kibot_status", "EMERGENCY_HALTED")
+            set_state("kibot_halt_timestamp", datetime.now().isoformat())
+            if sys.platform.startswith("linux"):
+                cmd = ["sudo", "/usr/bin/systemctl", "stop", "kibot-v3-core.service"]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if proc.returncode != 0:
+                    raise RuntimeError(f"systemctl stop failed: {proc.stderr}")
+                return "Stopped kibot-v3-core.service via systemctl"
+            return "Simulated stop of kibot-v3-core.service on non-Linux"
+
+        def _revert_stop():
+            set_state("kibot_status", "ACTIVE")
+            if sys.platform.startswith("linux"):
+                cmd = ["sudo", "/usr/bin/systemctl", "start", "kibot-v3-core.service"]
+                subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            return "Restarted kibot-v3-core.service"
+
+        try:
+            return actuate(
+                name="kibot_emergency_stop",
+                tier="L2",
+                fn=_do_stop,
+                params={"action": "emergency_stop", "reason": reason, "host": "server1", "service": "kibot-v3-core.service"},
+                entity="kibot_controller",
+                reason=reason,
+                revert=_revert_stop,
+                reversible=True
+            )
+        except ActuatorError as ae:
+            logger.warning(f"Actuator blocked emergency stop: {ae}")
+            return {"success": False, "error": str(ae)}
+        except Exception as e:
+            logger.error(f"Failed to execute emergency stop: {e}")
+            return {"success": False, "error": str(e)}
+
 
 # Global instance
 kibot_controller = KiBotController()
