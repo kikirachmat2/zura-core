@@ -62,10 +62,14 @@ def create_release_tarball() -> Path:
     exclude_patterns = [
         "venv", ".git", "__pycache__", ".pytest_cache", ".DS_Store",
         "data/zura.db", "data/zura.db.bak_05b", "data/kisahkomisi.db",
-        "data/Buku_Kas_Bos_Kiki.csv", ".env", "temp_voice", "*.pyc"
+        "data/Buku_Kas_Bos_Kiki.csv", "temp_voice", "*.pyc",
+        "zura_release_bundle.tar.gz", "zura_release_manifest.txt"
     ]
 
     def filter_bundle(tarinfo):
+        basename = os.path.basename(tarinfo.name)
+        if basename == ".env":
+            return None
         for pattern in exclude_patterns:
             if pattern in tarinfo.name:
                 return None
