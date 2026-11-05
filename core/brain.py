@@ -66,9 +66,9 @@ class ZuraBrain:
         # Tier 1: Try Gemini First
         response_text = self._call_gemini(user_prompt, history, full_system)
         
-        # Tier 2: Lightning-Fast Groq Fallback (Llama 3.3 70B)
+        # Tier 2: Lightning-Fast Groq Fallback (openai/gpt-oss-120b)
         if not response_text:
-            logger.warning("Gemini API failed or timed out. Failing over to Groq Llama 3.3...")
+            logger.warning("Gemini API failed or timed out. Failing over to Groq LPU...")
             response_text = self._call_groq(user_prompt, history, full_system)
 
         # Tier 3: OpenRouter
@@ -99,24 +99,25 @@ class ZuraBrain:
             messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": prompt})
 
-        payload = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": messages,
-            "temperature": 0.85,
-            "max_tokens": 2048
-        }
+        for model in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.85,
+                "max_tokens": 2048
+            }
 
-        try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=20)
-            if resp.status_code == 200:
-                data = resp.json()
-                choices = data.get("choices", [])
-                if choices:
-                    return choices[0].get("message", {}).get("content", "").strip()
-            else:
-                logger.error(f"Groq API returned status {resp.status_code}: {resp.text}")
-        except Exception as e:
-            logger.error(f"Groq call exception: {e}")
+            try:
+                resp = requests.post(url, json=payload, headers=headers, timeout=12)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    choices = data.get("choices", [])
+                    if choices:
+                        return choices[0].get("message", {}).get("content", "").strip()
+                else:
+                    logger.warning(f"Groq API model {model} returned status {resp.status_code}: {resp.text}")
+            except Exception as e:
+                logger.warning(f"Groq call exception ({model}): {e}")
 
         return None
 
@@ -124,8 +125,6 @@ class ZuraBrain:
         if not self.gemini_key:
             return None
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent?key={self.gemini_key}"
-        
         contents = []
         for h in history:
             role = "user" if h["role"] == "user" else "model"
@@ -145,19 +144,29 @@ class ZuraBrain:
             }
         }
 
-        try:
-            resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return parts[0].get("text", "").strip()
-            else:
-                logger.error(f"Gemini API returned status {resp.status_code}: {resp.text}")
-        except Exception as e:
-            logger.error(f"Gemini call exception: {e}")
+        # Try primary model then fallback models
+        models_to_try = [self.gemini_model, "gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3-flash-preview"]
+        # Remove duplicates while preserving order
+        seen = set()
+        models = [m for m in models_to_try if not (m in seen or seen.add(m))]
+
+        for m in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={self.gemini_key}"
+            try:
+                resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=12)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "").strip()
+                elif resp.status_code == 429:
+                    logger.warning(f"Gemini model {m} rate limited (429), trying next...")
+                else:
+                    logger.warning(f"Gemini model {m} returned {resp.status_code}: {resp.text[:100]}")
+            except Exception as e:
+                logger.warning(f"Gemini call exception ({m}): {e}")
 
         return None
 
@@ -184,7 +193,7 @@ class ZuraBrain:
         }
 
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=20)
+            resp = requests.post(url, json=payload, headers=headers, timeout=12)
             if resp.status_code == 200:
                 data = resp.json()
                 choices = data.get("choices", [])
