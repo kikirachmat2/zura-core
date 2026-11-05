@@ -23,6 +23,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 # Add project root to sys.path
@@ -315,7 +316,9 @@ class TestUpdaterBootMarkerProof(BaseIsolatedTestCase):
 class TestKiBotAuditAndRotation(BaseIsolatedTestCase):
     """Item 8: KiBot 3-backup rotation, chmod 600, and changed-key-only logging."""
 
-    def test_kibot_backup_rotation_and_chmod(self):
+    @patch("subprocess.run")
+    def test_kibot_backup_rotation_and_chmod(self, mock_subproc):
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="", stderr="")
         env_file = Path(self.tmp_dir) / ".env"
         env_file.write_text("MAX_SINGLE_TRADE_IDR=750000.0\nSECRET_KEY=supersecret123\n")
         os.chmod(env_file, 0o600)
@@ -352,6 +355,7 @@ class TestTierGuardsAndCaps(BaseIsolatedTestCase):
 
     def test_wifi_reconnect_defaults_to_l3(self):
         watchdog = WifiWatchdog()
+        watchdog.is_mac = True  # Ensure test validates L3 gate regardless of host OS
         # reset_wifi_interface must queue for L3 approval, not execute directly
         res = watchdog.reset_wifi_interface()
         self.assertFalse(res, "Default tier must be L3, returning False without explicit approval")
