@@ -555,7 +555,9 @@ class ZuraOrchestrator:
                 if tele:
                     lines = [
                         "👑 <b>ZURA EXECUTIVE WAR ROOM FLEET:</b>\n",
-                        "Status real-time 3 node otonom (Supabase Cloud Sync):\n"
+                        "• <b>Database Utama (Primary SOT):</b> <code>Local SQLite NVMe (100% Offline-Resilient)</code>",
+                        "• <b>Database Cadangan (Backup Mirror):</b> <code>Supabase Cloud PostgreSQL</code>\n",
+                        "Status detak 3 node otonom:\n"
                     ]
                     for b in tele:
                         badge = "🟢 ONLINE" if b.get("status") == "ONLINE" else "🟡 " + b.get("status", "BUSY")
@@ -564,10 +566,10 @@ class ZuraOrchestrator:
                         lines.append(f"  └ Peran: <code>{b.get('role')}</code>")
                         lines.append(f"  └ Status: {badge} (detak {age}s lalu)")
                         lines.append(f"  └ Node: <code>{b.get('host')}</code>\n")
-                    lines.append("<i>Komunikasi terhubung hybrid (Telegram Group War Room + Supabase Bus + IPC). Bos Kiki cukup memantau!</i>")
+                    lines.append("<i>Primary logic berjalan 100% lokal di server. Supabase berfungsi sebagai cermin backup & jalur alternatif!</i>")
                     await self.send_text(session, chat_id, "\n".join(lines))
                 else:
-                    await self.send_text(session, chat_id, "⚠️ Belum ada data telemetry fleet di Supabase.")
+                    await self.send_text(session, chat_id, "ℹ️ Database utama (Local SQLite) aktif normal. Mirror Supabase sedang idle.")
             except Exception as e:
                 await self.send_text(session, chat_id, f"⚠️ Gagal cek fleet: {e}")
             return

@@ -1,6 +1,8 @@
 """
-core/supabase_hub.py - Unified Cloud Fleet Database & Hybrid Communication Hub
-Connects Zura, KisahKomisi (Threads), and KiBot V3 via Supabase PostgreSQL & Event Bus.
+core/supabase_hub.py - Secondary Offsite Backup & Alternative Cloud Mirror
+ROLE: Secondary Backup & Alternative Channel ONLY (Local SQLite is Primary Source of Truth).
+All calls here are non-blocking / shadow mirrors. If Supabase is unreachable, all core
+operations in Zura, KisahKomisi, and KiBot continue with zero interruption from local SQLite.
 """
 
 import os
