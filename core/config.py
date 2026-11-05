@@ -128,3 +128,13 @@ DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = BASE_DIR / "logs"
 TEMP_VOICE_DIR = BASE_DIR / "temp_voice"
 DB_PATH = DATA_DIR / "zura.db"
+
+# Supabase Cloud Database (Unified Fleet Hub)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zqgzrkuhemknqnlfdgjr.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_DB_HOST = os.getenv("SUPABASE_DB_HOST", "aws-0-ap-southeast-1.pooler.supabase.com")
+SUPABASE_DB_PORT = int(os.getenv("SUPABASE_DB_PORT", "5432"))
+SUPABASE_DB_USER = os.getenv("SUPABASE_DB_USER", "postgres.zqgzrkuhemknqnlfdgjr")
+SUPABASE_DB_PASS = os.getenv("SUPABASE_DB_PASS", "")
+SUPABASE_DB_NAME = os.getenv("SUPABASE_DB_NAME", "postgres")
+
