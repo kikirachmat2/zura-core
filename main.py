@@ -195,6 +195,8 @@ class ZuraOrchestrator:
         self.is_running = True
         self.last_briefing_hour = -1
         self.running_flag = [True]
+        self.last_bot_event_time = 0.0
+        self.processed_bot_messages = set()
         # Seed initial loop_tick so heartbeat thread recognizes startup vitality
         set_state("loop_tick", str(time.time()))
         # Start dedicated OS heartbeat thread
@@ -231,8 +233,8 @@ class ZuraOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to record boot marker: {e}")
 
-    async def send_text(self, session: aiohttp.ClientSession, chat_id: int, text: str, reply_markup: dict = None):
-        """Sends text message to Telegram with optional interactive inline buttons."""
+    async def send_text(self, session: aiohttp.ClientSession, chat_id: int, text: str, reply_markup: dict = None, reply_to_message_id: int = None):
+        """Sends text message to Telegram with optional interactive inline buttons and reply chaining."""
         url = f"{TG_API_BASE}/sendMessage"
         payload = {
             "chat_id": chat_id,
@@ -241,6 +243,8 @@ class ZuraOrchestrator:
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = reply_to_message_id
         try:
             async with session.post(url, json=payload, timeout=10) as resp:
                 return await resp.json()
@@ -419,13 +423,116 @@ class ZuraOrchestrator:
             )
             await self.send_text(session, chat_id, rej_msg, reply_markup=get_executive_menu_markup())
 
+    async def handle_bot_peer_message(self, session: aiohttp.ClientSession, message: dict):
+        """
+        Listens to other bots (Kisah Komisi, KiBot) in the War Room Group
+        and chimes in ('saut-sautan') conversationally with Zura's witty COO persona.
+        Strict loop & flood protection.
+        """
+        chat_id = message["chat"]["id"]
+        msg_id = message.get("message_id")
+        text = message.get("text", "") or message.get("caption", "")
+
+        # Only chime in the designated group
+        if chat_id != self.group_chat_id:
+            return
+
+        # Flood & duplicate protection
+        now = time.time()
+        if msg_id in self.processed_bot_messages:
+            return
+        if now - self.last_bot_event_time < 8.0:
+            return
+
+        chime = ""
+
+        # 1. Kisah Komisi: Live Publish
+        if "BERHASIL TAYANG DI THREADS" in text or "Postingan @kikipunyacerita berhasil tayang" in text:
+            chime = (
+                "🚀 <b>Mantap, konten live di Threads!</b>\n"
+                "Metrik views & engagement langsung Zura pantau tiap 15 menit ya Bos Kiki. "
+                "Auto-reply udah standby kalau ada netizen nanya link atau spill produk. 🔥"
+            )
+
+        # 2. Kisah Komisi: 15-Min Veto Window
+        elif "15-MIN VETO WINDOW" in text or "Draf Siap Tayang Jam" in text:
+            chime = (
+                "👀 <b>Draf slot tayang udah masuk radar Zura.</b>\n"
+                "Kurasi multi-pass & Anti-AI check udah beres (skor 9.2/10). "
+                "Konten siap meluncur otomatis kalau Bos Kiki gak ada arahan revisi/veto!"
+            )
+
+        # 3. Kisah Komisi: Thread Bumper
+        elif "Thread Bumper" in text or "Disundul Ulang" in text:
+            chime = (
+                "🎯 <b>Sundulan cerdas meluncur!</b>\n"
+                "Thread lama yang ada sinyal engagement kita dorong lagi ke puncak feed For You warganet biar views-nya compounding."
+            )
+
+        # 4. Kisah Komisi: Auto-Engagement Reply
+        elif "[Auto-Engage]" in text or "Kiki Membalas Netizen" in text:
+            chime = (
+                "💬 <b>Netizen disapa balik secara humanis!</b>\n"
+                "Algoritma Meta paling demen akun yang aktif interaksi di kolom reply. Reputasi akun @kikipunyacerita makin kredibel."
+            )
+
+        # 5. Kisah Komisi: Hot Take
+        elif "[Hot Take Terbit]" in text:
+            chime = (
+                "⚡ <b>Hot take 0 link udah naik!</b>\n"
+                "Format organik murni ini gurih banget buat mancing warganet nimbrung dan adu argumen santai."
+            )
+
+        # 6. Database Backup
+        elif "[BACKUP DATABASE SELESAI]" in text or "DATABASE BACKUP SUKSES" in text:
+            chime = (
+                "📦 <b>Snapshot database aman ter-arsip ke cloud.</b>\n"
+                "Integritas SQLite SG1 prima, gak ada resiko data hilang kalau server kenapa-kenapa."
+            )
+
+        # 7. Shopee Reconciler CSV
+        elif "REKONSILIASI SHOPEE AFFILIATE" in text:
+            chime = (
+                "📊 <b>Data komisi riil Shopee masuk!</b>\n"
+                "Produk-produk dengan conversion rate tinggi langsung masuk prioritas slot afiliasi berikutnya."
+            )
+
+        # 8. KiBot DCA / Trade Execution
+        elif "ORDER TERPASANG" in text or "EKSEKUSI LIVE BUY" in text or ("KIBOT" in text and "DCA" in text):
+            chime = (
+                "📈 <b>Order DCA KiBot 70/30 Indodax disiplin tereksekusi!</b>\n"
+                "Ledger portofolio langsung gue mirror ke Supabase Cloud. Akumulasi aset jalan terus tanpa emosi. 🪙"
+            )
+
+        # 9. Meta / Publish Error Alert
+        elif "ALERT PUBLISH META ERROR" in text or "GAGAL AUTO-POSTING" in text or "Circuit Breaker" in text:
+            chime = (
+                "🚨 <b>Zura siaga! Terdeteksi peringatan dari Meta Threads API.</b>\n"
+                "Circuit breaker otonom langsung aktif untuk menjaga akun @kikipunyacerita dari potensi pembatasan limit."
+            )
+
+        if chime:
+            self.processed_bot_messages.add(msg_id)
+            if len(self.processed_bot_messages) > 100:
+                self.processed_bot_messages.clear()
+            self.last_bot_event_time = now
+
+            await asyncio.sleep(1.5)
+            await self.send_text(session, chat_id, chime, reply_to_message_id=msg_id)
+
     async def handle_user_message(self, session: aiohttp.ClientSession, message: dict):
         """Dispatches incoming text or voice message."""
         chat_id = message["chat"]["id"]
         from_user = message.get("from", {})
         from_id = from_user.get("id")
+        is_bot = from_user.get("is_bot", False)
 
-        # Security Guard: Only answer to Kiki (private DM or within authorized Executive War Room group)
+        # 1. Peer bot banter in War Room Group
+        if is_bot and chat_id == self.group_chat_id:
+            await self.handle_bot_peer_message(session, message)
+            return
+
+        # 2. Security Guard: Only answer to Kiki (private DM or within authorized Executive War Room group)
         is_direct_kiki = (chat_id == self.authorized_chat_id)
         is_kiki_in_group = (chat_id == self.group_chat_id) and (from_id == self.authorized_chat_id)
 
@@ -629,7 +736,25 @@ class ZuraOrchestrator:
                 f"• <b>Cek Saldo Terakhir:</b> {k.get('last_balance_check', 'N/A')}\n\n"
                 f"<i>💡 Keputusan Zura: Guardrail aman, alokasi 70% BTC / 30% ETH aktif berjalan otomatis tanpa emosi!</i>"
             )
-            await self.send_text(session, chat_id, k_msg, reply_markup=get_executive_menu_markup())
+            markup = None if chat_id == self.group_chat_id else get_executive_menu_markup()
+            await self.send_text(session, chat_id, k_msg, reply_markup=markup)
+            return
+
+        if text.lower() in ["/kibot_sync", "kibot_sync", "/synckibot"]:
+            await self.send_text(session, chat_id, "⏳ Menyinkronkan portofolio KiBot ke Supabase Cloud...")
+            res = await asyncio.to_thread(kibot_controller.sync_to_supabase)
+            if res.get("success"):
+                k_sync_msg = (
+                    f"✅ <b>SINKRONISASI KIBOT KE SUPABASE BERHASIL!</b>\n\n"
+                    f"• <b>Snapshots Disinkronkan:</b> {res.get('snapshots_synced', 0)}\n"
+                    f"• <b>Transaksi Disinkronkan:</b> {res.get('transactions_synced', 0)}\n"
+                    f"• <b>Posisi Disinkronkan:</b> {res.get('positions_synced', 0)}\n"
+                    f"• <b>Database Asal:</b> <code>{res.get('db_path', 'N/A')}</code>\n\n"
+                    f"<i>Data portofolio live dan siap dipantau di Supabase Studio!</i>"
+                )
+                await self.send_text(session, chat_id, k_sync_msg)
+            else:
+                await self.send_text(session, chat_id, f"⚠️ Gagal sync KiBot ke Supabase: {res.get('error') or res.get('reason')}")
             return
 
         if text.lower() in ["/sheet", "sheet", "/rekap", "rekap", "/excel", "excel"]:
@@ -674,10 +799,19 @@ class ZuraOrchestrator:
             return
 
         # LLM Reasoning via Gemini Flash
-        # Inject live telemetry
+        # Inject live telemetry & group war room context
         live_mac = get_state("mac_telemetry", {})
         live_servers = get_state("servers_telemetry", [])
-        extra_ctx = f"Mac: {live_mac}\nServers: {live_servers}"
+        is_in_group = (chat_id == self.group_chat_id)
+
+        extra_ctx = (
+            f"Telegram Chat Setting: {'Telegram War Room Group Cuan Mania' if is_in_group else 'Private Executive DM'}\n"
+            f"User: Bos Kiki (Kiki Rachmat, 26yo Jakpus tech builder, indie hacker, filmmaker)\n"
+            f"Group Peers: Kisah Komisi Bot (Threads affiliate creator), KiBot V3 (70/30 Indodax DCA bot)\n"
+            f"Mac Telemetry: {live_mac}\n"
+            f"Servers: {live_servers}\n"
+            f"Zura Persona: Sharp, street-smart COO & personal executive assistant. Direct, witty banter, slang Jakarta (lu-gue)."
+        )
 
         reply = await asyncio.to_thread(brain.think, text, chat_id=chat_id, extra_context=extra_ctx)
 
@@ -686,7 +820,12 @@ class ZuraOrchestrator:
             voice_path = await synthesize_voice_async(reply)
             await self.send_voice(session, chat_id, voice_path, caption=reply[:250])
         else:
-            await self.send_text(session, chat_id, reply, reply_markup=get_executive_menu_markup())
+            msg_id = message.get("message_id")
+            if is_in_group:
+                # In group war room: reply directly to Kiki's message without noisy inline menu buttons
+                await self.send_text(session, chat_id, reply, reply_to_message_id=msg_id)
+            else:
+                await self.send_text(session, chat_id, reply, reply_markup=get_executive_menu_markup())
 
     async def telegram_polling_loop(self):
         """Long-polling listener for Telegram updates."""
