@@ -9,6 +9,7 @@ import os
 import json
 import time
 import logging
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 try:
     import psycopg2
@@ -456,3 +457,187 @@ def record_executive_decision(domain: str, trigger_event: str, decision_taken: s
         return False
     finally:
         conn.close()
+
+
+def set_shared_user_profile(category: str, key: str, value: str, confidence: float = 1.0) -> bool:
+    """Updates user profile or preferences in Supabase shared profile."""
+    conn = get_pg_connection()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO shared_user_profile (category, key, value, confidence, updated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (key) DO UPDATE SET
+                    category = EXCLUDED.category,
+                    value = EXCLUDED.value,
+                    confidence = EXCLUDED.confidence,
+                    updated_at = NOW();
+            """, (category, key, value, confidence))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Error setting shared user profile in Supabase: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+# =====================================================================
+# 6. KIBOT DIRECT SYNC ENGINE (SQLITE -> SUPABASE)
+# =====================================================================
+
+def sync_kibot_to_supabase(kibot_db_path: Optional[Any] = None) -> Dict[str, Any]:
+    """
+    Ingests live portfolio snapshots, transactions, and positions from kibot_v3.db
+    and synchronizes them into Supabase Cloud PostgreSQL.
+    Non-blocking, fail-safe fallback.
+    """
+    import sqlite3
+    from pathlib import Path
+
+    candidate_paths = [
+        Path(kibot_db_path) if kibot_db_path else None,
+        Path("/home/ubuntu/KiBotV3/kibot_v3.db"),
+        Path.home() / "Documents/Web Develop/KiBot/kibot_v3.db",
+        Path(__file__).resolve().parent.parent / "data/kibot_v3.db"
+    ]
+
+    target_db = None
+    for p in candidate_paths:
+        if p and p.exists():
+            target_db = p
+            break
+
+    if not target_db:
+        return {"success": False, "reason": "KIBOT_DB_NOT_FOUND"}
+
+    conn_pg = get_pg_connection()
+    if not conn_pg:
+        return {"success": False, "reason": "SUPABASE_CONNECTION_UNAVAILABLE"}
+
+    synced_snaps = 0
+    synced_txs = 0
+    synced_pos = 0
+
+    try:
+        # Read from SQLite
+        conn_lite = sqlite3.connect(str(target_db), timeout=5)
+        conn_lite.row_factory = sqlite3.Row
+        cur_lite = conn_lite.cursor()
+
+        # 1. Snapshots
+        cur_lite.execute("""
+            SELECT id, total_equity_idr, cash_idr, allocations_json, regime_phase, is_paper, timestamp
+            FROM portfolio_snapshots
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        snapshots = cur_lite.fetchall()
+
+        # 2. Transactions
+        cur_lite.execute("""
+            SELECT id, order_id, pair, side, order_type, price, amount, fee, fee_asset, is_paper, timestamp
+            FROM transactions
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        transactions = cur_lite.fetchall()
+
+        # 3. Positions
+        cur_lite.execute("""
+            SELECT asset, amount, cost_basis_idr, total_invested_idr, updated_at
+            FROM positions;
+        """)
+        positions = cur_lite.fetchall()
+
+        conn_lite.close()
+
+        # Write to Supabase PG
+        with conn_pg.cursor() as cur_pg:
+            # Upsert snapshots
+            for s in snapshots:
+                alloc_json = s["allocations_json"] if s["allocations_json"] else "{}"
+                if isinstance(alloc_json, str):
+                    try:
+                        json.loads(alloc_json)
+                    except Exception:
+                        alloc_json = "{}"
+                cur_pg.execute("""
+                    INSERT INTO kibot_snapshots (id, total_equity_idr, cash_idr, allocations_json, regime_phase, is_paper, timestamp, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (id) DO UPDATE SET
+                        total_equity_idr = EXCLUDED.total_equity_idr,
+                        cash_idr = EXCLUDED.cash_idr,
+                        allocations_json = EXCLUDED.allocations_json,
+                        regime_phase = EXCLUDED.regime_phase;
+                """, (
+                    s["id"], s["total_equity_idr"], s["cash_idr"], alloc_json,
+                    s["regime_phase"], s["is_paper"], s["timestamp"]
+                ))
+                synced_snaps += 1
+
+            # Upsert transactions
+            for t in transactions:
+                cur_pg.execute("""
+                    INSERT INTO kibot_transactions (id, order_id, pair, side, order_type, price, amount, fee, fee_asset, is_paper, timestamp, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (id) DO NOTHING;
+                """, (
+                    t["id"], t["order_id"], t["pair"], t["side"], t["order_type"],
+                    t["price"], t["amount"], t["fee"], t["fee_asset"], t["is_paper"], t["timestamp"]
+                ))
+                synced_txs += 1
+
+            # Upsert positions
+            for pos in positions:
+                cur_pg.execute("""
+                    INSERT INTO kibot_positions (asset, amount, cost_basis_idr, total_invested_idr, updated_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (asset) DO UPDATE SET
+                        amount = EXCLUDED.amount,
+                        cost_basis_idr = EXCLUDED.cost_basis_idr,
+                        total_invested_idr = EXCLUDED.total_invested_idr,
+                        updated_at = EXCLUDED.updated_at;
+                """, (
+                    pos["asset"], pos["amount"], pos["cost_basis_idr"], pos["total_invested_idr"], pos["updated_at"]
+                ))
+                synced_pos += 1
+
+            # Update KiBot heartbeat in fleet_telemetry
+            latest_snap = snapshots[0] if snapshots else None
+            metrics = {
+                "total_equity_idr": float(latest_snap["total_equity_idr"]) if latest_snap else 0.0,
+                "cash_idr": float(latest_snap["cash_idr"]) if latest_snap else 0.0,
+                "regime": latest_snap["regime_phase"] if latest_snap else "ACCUMULATE_70_30",
+                "total_tx_count": len(transactions),
+                "synced_at": datetime.now().isoformat()
+            } if latest_snap else {}
+
+            cur_pg.execute("""
+                INSERT INTO fleet_telemetry (bot_id, bot_name, role, status, last_heartbeat, host, metrics, updated_at)
+                VALUES ('kibot', 'KiBot V3 Indodax Trader', 'ASSET_GROWTH', 'ONLINE', NOW(), 'SG1 Cloud', %s, NOW())
+                ON CONFLICT (bot_id) DO UPDATE SET
+                    last_heartbeat = NOW(),
+                    metrics = EXCLUDED.metrics,
+                    status = 'ONLINE',
+                    updated_at = NOW();
+            """, (json.dumps(metrics),))
+
+            conn_pg.commit()
+
+        return {
+            "success": True,
+            "snapshots_synced": synced_snaps,
+            "transactions_synced": synced_txs,
+            "positions_synced": synced_pos,
+            "db_path": str(target_db)
+        }
+
+    except Exception as e:
+        logger.error(f"Error syncing KiBot to Supabase: {e}")
+        return {"success": False, "error": str(e)}
+    finally:
+        conn_pg.close()
+

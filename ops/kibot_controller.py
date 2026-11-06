@@ -103,11 +103,27 @@ class KiBotController:
                 "timestamp": datetime.now().isoformat()
             }
             set_state("kibot_telemetry", data)
+
+            # Auto-sync to Supabase shadow cloud
+            try:
+                self.sync_to_supabase()
+            except Exception as se:
+                logger.debug(f"Shadow sync to Supabase skipped: {se}")
+
             return data
 
         except Exception as e:
             logger.error(f"Error querying kibot_v3.db: {e}")
             return {"connected": False, "error": str(e)}
+
+    def sync_to_supabase(self) -> Dict[str, Any]:
+        """Synchronizes live KiBot SQLite data to Supabase Cloud."""
+        try:
+            from core.supabase_hub import sync_kibot_to_supabase
+            return sync_kibot_to_supabase(self.db_path)
+        except Exception as e:
+            logger.warning(f"Failed to sync KiBot to Supabase: {e}")
+            return {"success": False, "error": str(e)}
 
     def tune_market_regime(self, regime: str, btc_pct: float = 0.70, eth_pct: float = 0.30, max_trade_idr: Optional[float] = None) -> Dict[str, Any]:
         """

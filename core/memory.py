@@ -111,6 +111,13 @@ def log_decision(domain: str, trigger_event: str, decision_taken: str, outcome: 
         """, (domain, trigger_event, decision_taken, outcome, time.time()))
         conn.commit()
 
+    # Asynchronous non-blocking mirror to Supabase Cloud
+    try:
+        from core.supabase_hub import record_executive_decision
+        record_executive_decision(domain, trigger_event, decision_taken, outcome)
+    except Exception:
+        pass
+
 
 def get_recent_decisions(limit: int = 10) -> List[Dict[str, Any]]:
     """Retrieves recent decisions for executive briefing."""
@@ -190,6 +197,13 @@ def record_transaction(amount: float, flow_type: str, category: str, description
         """, (tx_date, amount, flow_type, category, description, source, time.time()))
         conn.commit()
 
+    # Mirror to Supabase capital flywheel ledger
+    try:
+        from core.supabase_hub import record_capital_flywheel
+        record_capital_flywheel(source=source, destination=category, amount_idr=amount, rationale=description)
+    except Exception:
+        pass
+
 
 def get_monthly_finance_summary(month_prefix: str = "") -> Dict[str, Any]:
     """Calculates income, expense, and net savings for the given month (YYYY-MM)."""
@@ -242,6 +256,13 @@ def set_user_preference(category: str, key: str, value: str, confidence: float =
                 updated_at=excluded.updated_at
         """, (category, key, value, confidence, time.time()))
         conn.commit()
+
+    # Mirror to Supabase shared user profile
+    try:
+        from core.supabase_hub import set_shared_user_profile
+        set_shared_user_profile(category, key, value, confidence)
+    except Exception:
+        pass
 
 
 def get_all_user_preferences() -> Dict[str, str]:
